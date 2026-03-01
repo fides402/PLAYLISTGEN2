@@ -220,13 +220,58 @@ const GENRE_MOOD_STYLES: Record<string, Record<string, string[]>> = {
   },
 }
 
+export interface DiscogsRelease {
+  artist: string
+  album: string
+}
+
+interface RawResult {
+  title?: string
+  community?: { want: number; have: number }
+  label?: string[]
+  style?: string[]
+  country?: string
+  year?: string
+}
+
 function extractArtist(title: string): string {
   return title.split(" - ")[0]?.trim() || ""
+}
+
+function extractAlbum(title: string): string {
+  return title.split(" - ").slice(1).join(" - ").trim() || ""
+}
+
+/**
+ * Mainstream filter: skip releases that are very common and barely sought-after.
+ * Allows popular albums that are still genuinely desired (high want count).
+ */
+function isTooMainstream(result: RawResult): boolean {
+  const want = result.community?.want ?? 0
+  const have = result.community?.have ?? 1
+  // >12000 copies in collections AND want/have ratio < 10% → pure mainstream
+  return have > 12000 && want / (have + 1) < 0.10
+}
+
+function extractRelease(result: RawResult, seen: Set<string>): DiscogsRelease | null {
+  if (isTooMainstream(result)) return null
+  const full = result.title ?? ""
+  const artist = extractArtist(full)
+  const album = extractAlbum(full)
+  const key = artist.toLowerCase()
+  if (
+    artist.length < 2 ||
+    artist.toLowerCase().includes("various") ||
+    seen.has(key)
+  ) return null
+  seen.add(key)
+  return { artist, album }
 }
 
 /**
  * Targeted Discogs query using explicit parameters extracted from user intent
  * (genre, style, country, year range). Used by the AI search route.
+ * Returns {artist, album} pairs for more precise Monochrome searching.
  */
 export async function getArtistsByDiscogParams({
   genre,
@@ -240,11 +285,11 @@ export async function getArtistsByDiscogParams({
   country?: string
   yearStart?: string
   yearEnd?: string
-}): Promise<string[]> {
+}): Promise<DiscogsRelease[]> {
   if (!TOKEN) return []
 
-  const seenArtists = new Set<string>()
-  const artists: string[] = []
+  const seen = new Set<string>()
+  const releases: DiscogsRelease[] = []
 
   // Build a list of years to query (pick up to 5 random years from the range)
   let yearsToQuery: Array<string | null> = [null]
@@ -263,7 +308,7 @@ export async function getArtistsByDiscogParams({
       const params = new URLSearchParams({
         type:       "release",
         format:     "LP",
-        per_page:   "10",
+        per_page:   "12",
         page:       String(Math.floor(Math.random() * 15) + 2),
         token:      TOKEN,
         sort:       "want",
@@ -280,43 +325,37 @@ export async function getArtistsByDiscogParams({
       )
       if (!res.ok) continue
 
-      const data = (await res.json()) as { results?: { title?: string }[] }
-      for (const release of data.results ?? []) {
-        const artist = extractArtist(release.title ?? "")
-        const key = artist.toLowerCase()
-        if (
-          artist.length > 1 &&
-          !artist.toLowerCase().includes("various") &&
-          !seenArtists.has(key)
-        ) {
-          seenArtists.add(key)
-          artists.push(artist)
-        }
+      const data = (await res.json()) as { results?: RawResult[] }
+      for (const result of data.results ?? []) {
+        const release = extractRelease(result, seen)
+        if (release) releases.push(release)
       }
     } catch {
       // keep going
     }
   }
 
-  return artists
+  return releases
 }
 
 /**
- * Returns real artists from Discogs matching the user's genres + mood.
+ * Returns releases from Discogs matching the user's genres + mood.
+ * Returns {artist, album} pairs so we can search Monochrome by album title.
  *
  * Strategy for rarity:
- *   - Sort by `want` (sought-after, harder to find) rather than `have` (popular)
+ *   - Sort by `want` (sought-after) rather than `have` (popular)
  *   - Randomise over a wide page range (2–20) so top-charting results are skipped
+ *   - Filter out too-mainstream releases by want/have ratio
  *   - Use niche subgenre styles instead of broad genre names
  */
 export async function getArtistsByGenreAndMood(
   genres: string[],
   mood: Mood
-): Promise<string[]> {
+): Promise<DiscogsRelease[]> {
   if (!TOKEN) return []
 
-  const seenArtists = new Set<string>()
-  const artists: string[] = []
+  const seen = new Set<string>()
+  const releases: DiscogsRelease[] = []
 
   const shuffledGenres = [...genres].sort(() => Math.random() - 0.5)
 
@@ -338,7 +377,6 @@ export async function getArtistsByGenreAndMood(
           type:       "release",
           format:     "LP",          // prefer full albums over compilations
           per_page:   "10",
-          // Wide random page range → avoids always returning chart-toppers
           page:       String(Math.floor(Math.random() * 18) + 2),
           token:      TOKEN,
           sort:       "want",        // ← sought-after / rare records first
@@ -351,23 +389,15 @@ export async function getArtistsByGenreAndMood(
           `${DISCOGS_URL}/database/search?${params.toString()}`,
           {
             headers: { "User-Agent": "HiFiMoodApp/1.0" },
-            next: { revalidate: 600 }, // short cache so results vary across calls
+            next: { revalidate: 600 },
           }
         )
         if (!res.ok) continue
 
-        const data = (await res.json()) as { results?: { title?: string }[] }
-        for (const release of data.results ?? []) {
-          const artist = extractArtist(release.title ?? "")
-          const key = artist.toLowerCase()
-          if (
-            artist.length > 1 &&
-            !artist.toLowerCase().includes("various") &&
-            !seenArtists.has(key)
-          ) {
-            seenArtists.add(key)
-            artists.push(artist)
-          }
+        const data = (await res.json()) as { results?: RawResult[] }
+        for (const result of data.results ?? []) {
+          const release = extractRelease(result, seen)
+          if (release) releases.push(release)
         }
       } catch {
         // keep going
@@ -375,5 +405,133 @@ export async function getArtistsByGenreAndMood(
     }
   }
 
-  return artists
+  return releases
+}
+
+/**
+ * Label-based discovery: search Discogs by cult/niche label names.
+ * Labels like ECM, Warp, Drag City, SST, Constellation act as quality proxies.
+ * Returns {artist, album} pairs.
+ */
+export async function getArtistsByLabel(labels: string[]): Promise<DiscogsRelease[]> {
+  if (!TOKEN || labels.length === 0) return []
+
+  const seen = new Set<string>()
+  const releases: DiscogsRelease[] = []
+
+  for (const label of labels.slice(0, 6)) {
+    try {
+      const params = new URLSearchParams({
+        type:       "release",
+        label:      label,
+        format:     "LP",
+        per_page:   "10",
+        page:       String(Math.floor(Math.random() * 10) + 2),
+        token:      TOKEN,
+        sort:       "want",
+        sort_order: "desc",
+      })
+
+      const res = await fetch(
+        `${DISCOGS_URL}/database/search?${params.toString()}`,
+        { headers: { "User-Agent": "HiFiMoodApp/1.0" }, next: { revalidate: 300 } }
+      )
+      if (!res.ok) continue
+
+      const data = (await res.json()) as { results?: RawResult[] }
+      for (const result of data.results ?? []) {
+        // No mainstream filter for label searches — the label itself is the quality signal
+        const full = result.title ?? ""
+        const artist = extractArtist(full)
+        const album = extractAlbum(full)
+        const key = artist.toLowerCase()
+        if (
+          artist.length > 1 &&
+          !artist.toLowerCase().includes("various") &&
+          !seen.has(key)
+        ) {
+          seen.add(key)
+          releases.push({ artist, album })
+        }
+      }
+    } catch {
+      // keep going
+    }
+  }
+
+  return releases
+}
+
+/**
+ * Get a Discogs "fingerprint" for an artist: label, style, country, year.
+ * Used to seed more targeted recommendations from liked tracks.
+ */
+export async function getDiscogsFingerprint(artistName: string): Promise<{
+  label?: string
+  style?: string
+  country?: string
+  yearStart?: string
+  yearEnd?: string
+} | null> {
+  if (!TOKEN || !artistName) return null
+  try {
+    const params = new URLSearchParams({
+      q:          artistName,
+      type:       "release",
+      format:     "LP",
+      per_page:   "5",
+      token:      TOKEN,
+      sort:       "want",
+      sort_order: "desc",
+    })
+
+    const res = await fetch(
+      `${DISCOGS_URL}/database/search?${params.toString()}`,
+      { headers: { "User-Agent": "HiFiMoodApp/1.0" }, next: { revalidate: 3600 } }
+    )
+    if (!res.ok) return null
+
+    const data = (await res.json()) as { results?: RawResult[] }
+    const results = data.results ?? []
+    if (results.length === 0) return null
+
+    // Aggregate across top 3 results for a more reliable fingerprint
+    const styles = new Map<string, number>()
+    const labels = new Map<string, number>()
+    const countries = new Map<string, number>()
+    const years: number[] = []
+
+    for (const r of results.slice(0, 3)) {
+      for (const s of r.style ?? []) styles.set(s, (styles.get(s) ?? 0) + 1)
+      for (const l of r.label ?? []) labels.set(l, (labels.get(l) ?? 0) + 1)
+      if (r.country) countries.set(r.country, (countries.get(r.country) ?? 0) + 1)
+      if (r.year) {
+        const y = parseInt(r.year)
+        if (!isNaN(y)) years.push(y)
+      }
+    }
+
+    const topStyle   = [...styles.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+    const topLabel   = [...labels.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+    const topCountry = [...countries.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+
+    let yearStart: string | undefined
+    let yearEnd: string | undefined
+    if (years.length > 0) {
+      const minY = Math.min(...years)
+      const maxY = Math.max(...years)
+      yearStart = String(Math.floor(minY / 10) * 10) // round to decade start
+      yearEnd   = String(Math.ceil(maxY / 10) * 10 - 1) // round to decade end
+    }
+
+    return {
+      label:     topLabel,
+      style:     topStyle,
+      country:   topCountry,
+      yearStart,
+      yearEnd,
+    }
+  } catch {
+    return null
+  }
 }

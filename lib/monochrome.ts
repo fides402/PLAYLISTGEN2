@@ -3,6 +3,9 @@ import type { Track } from "./types"
 const MONO_URL =
   process.env.MONOCHROME_API_URL || "https://api.monochrome.tf"
 
+// Skip interludes, skits, jingles — anything under 90 seconds
+const MIN_DURATION_SECS = 90
+
 function buildCoverUrl(cover: string | null | undefined): string | null {
   if (!cover) return null
   // Tidal cover UUIDs use hyphens; the CDN path uses forward slashes
@@ -53,6 +56,10 @@ function extractItems(data: unknown): Record<string, unknown>[] {
   )
 }
 
+function isLongEnough(t: Track): boolean {
+  return !t.duration || t.duration >= MIN_DURATION_SECS
+}
+
 export async function searchTracks(query: string): Promise<Track[]> {
   try {
     const res = await fetch(
@@ -63,7 +70,7 @@ export async function searchTracks(query: string): Promise<Track[]> {
     const data = await res.json()
     return extractItems(data)
       .map(normalizeTrack)
-      .filter(Boolean) as Track[]
+      .filter((t): t is Track => !!t && isLongEnough(t))
   } catch {
     return []
   }
@@ -71,9 +78,7 @@ export async function searchTracks(query: string): Promise<Track[]> {
 
 /**
  * Find tracks BY a specific artist.
- * NOTE: the ?a= endpoint returns artist *objects*, not tracks.
- * Using ?s= (track search) instead — it searches both title and artist name,
- * and reliably returns tracks by the queried artist when given a full name.
+ * Using ?s= (track search) which reliably returns tracks by the queried artist.
  */
 export async function searchArtist(name: string): Promise<Track[]> {
   try {
@@ -85,7 +90,30 @@ export async function searchArtist(name: string): Promise<Track[]> {
     const data = await res.json()
     return extractItems(data)
       .map(normalizeTrack)
-      .filter(Boolean) as Track[]
+      .filter((t): t is Track => !!t && isLongEnough(t))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Search by "Artist Album" — more precise than artist name alone.
+ * Falls back to artist-only search if no album provided.
+ * Discogs gives us specific album titles so we can target exact records.
+ */
+export async function searchAlbum(artist: string, album: string): Promise<Track[]> {
+  if (!album) return searchArtist(artist)
+  try {
+    const query = `${artist} ${album}`.trim()
+    const res = await fetch(
+      `${MONO_URL}/search/?s=${encodeURIComponent(query)}`,
+      { next: { revalidate: 300 } }
+    )
+    if (!res.ok) return []
+    const data = await res.json()
+    return extractItems(data)
+      .map(normalizeTrack)
+      .filter((t): t is Track => !!t && isLongEnough(t))
   } catch {
     return []
   }
@@ -103,7 +131,7 @@ export async function getRecommendations(id: number): Promise<Track[]> {
         (item.track as Record<string, unknown>) ?? item
       return normalizeTrack(track)
     })
-    return tracks.filter(Boolean) as Track[]
+    return tracks.filter((t): t is Track => !!t && isLongEnough(t))
   } catch {
     return []
   }

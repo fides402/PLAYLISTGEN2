@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState, useCallback, useRef, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { useStore } from "@/lib/store"
 import { AudioPlayer, seekRef } from "@/components/AudioPlayer"
@@ -170,7 +170,7 @@ function ForYouPanel({ onSelectTrack }: { onSelectTrack: (i: number) => void }) 
   const likedTrackIds = useStore((s) => s.likedTrackIds)
 
   const fetch_ = useCallback(async () => {
-    const { likedTrackIds, playedTrackIds, playlist } = useStore.getState()
+    const { likedTrackIds, likedTracks, playedTrackIds, playlist } = useStore.getState()
     if (likedTrackIds.length === 0) return
     setLoading(true)
     try {
@@ -178,6 +178,9 @@ function ForYouPanel({ onSelectTrack }: { onSelectTrack: (i: number) => void }) 
       params.set("liked", likedTrackIds.slice(-30).join(","))
       const seen = [...new Set([...playedTrackIds, ...playlist.map((t) => t.id)])]
       if (seen.length > 0) params.set("seen", seen.slice(-300).join(","))
+      // Pass liked artist names for Discogs fingerprinting (|| separated to avoid comma conflicts)
+      const likedArtists = [...new Set(likedTracks.map((t) => t.artist))].slice(0, 10)
+      if (likedArtists.length > 0) params.set("artists", likedArtists.join("||"))
       const res = await fetch(`/api/for-you?${params}`)
       const data = await res.json()
       if (Array.isArray(data)) setTracks(data)
@@ -277,6 +280,9 @@ export default function PlayerPage() {
     addLike, removeLike, isLiked, addToPlaylist,
   } = useStore()
 
+  // Memoize playlist IDs for the auto-extend effect
+  const playlistIds = useMemo(() => playlist.map((t) => t.id), [playlist])
+
   const [searchQuery, setSearchQuery] = useState("")
   const [isSearching, setIsSearching] = useState(false)
   const [isRegenerating, setIsRegenerating] = useState(false)
@@ -306,6 +312,38 @@ export default function PlayerPage() {
       .catch(() => {})
       .finally(() => setIsLoadingRecs(false))
   }, [currentTrack?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-extend queue: when < 5 tracks remain ahead, silently fetch more
+  const isExtending = useRef(false)
+  useEffect(() => {
+    const remaining = playlist.length - currentIndex - 1
+    if (remaining >= 5) return
+    if (isExtending.current) return
+    const { lastSearchQuery: lsq, currentMood: cm, playedTrackIds, excludedGenres: eg } = useStore.getState()
+    if (!lsq && !cm) return
+
+    isExtending.current = true
+    const inPlaylist = new Set(playlistIds)
+    const played = [...new Set([...playedTrackIds, ...playlistIds])].slice(-200)
+    const params = new URLSearchParams()
+    if (played.length > 0) params.set("seen", played.join(","))
+    if (eg.length > 0) params.set("excluded", eg.join(","))
+
+    const endpoint = lsq
+      ? `/api/ai-search?q=${encodeURIComponent(lsq)}&${params}`
+      : `/api/playlist?mood=${cm}&${params}`
+
+    fetch(endpoint)
+      .then((r) => r.json())
+      .then((newTracks: Track[]) => {
+        if (Array.isArray(newTracks) && newTracks.length > 0) {
+          const fresh = newTracks.filter((t) => !inPlaylist.has(t.id))
+          if (fresh.length > 0) addToPlaylist(fresh)
+        }
+      })
+      .catch(() => {})
+      .finally(() => { isExtending.current = false })
+  }, [currentIndex, playlist.length, playlistIds, addToPlaylist]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSearch = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { searchArtist } from "@/lib/monochrome"
+import { searchArtist, searchAlbum } from "@/lib/monochrome"
 import { getArtistsByGenreAndMood } from "@/lib/discogs"
 import { ALL_GENRES, MOODS } from "@/lib/types"
 import type { Track, Mood } from "@/lib/types"
@@ -110,18 +110,18 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ─── PRIMARY: Discogs → Monochrome ─────────────────────────────────────────
-  const discogsArtists = await getArtistsByGenreAndMood(includedGenres, mood)
-  const realArtists = discogsArtists.filter((a) => !isStockArtist(a))
+  // ─── PRIMARY: Discogs → Monochrome album search ────────────────────────────
+  const discogsReleases = await getArtistsByGenreAndMood(includedGenres, mood)
+  const realReleases = discogsReleases.filter((r) => !isStockArtist(r.artist))
 
   const artistSearches = await Promise.allSettled(
-    realArtists.slice(0, 25).map((a) => searchArtist(a))
+    realReleases.slice(0, 25).map((r) => searchAlbum(r.artist, r.album))
   )
 
   for (let i = 0; i < artistSearches.length; i++) {
     const r = artistSearches[i]
     if (r.status !== "fulfilled") continue
-    const seedName = realArtists[i]
+    const seedName = realReleases[i].artist
     const matched = filterByArtistMatch(r.value, seedName)
     addUnique(matched, 3)
   }
