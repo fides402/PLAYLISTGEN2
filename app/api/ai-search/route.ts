@@ -55,6 +55,7 @@ function filterByArtistMatch(tracks: Track[], seedArtist: string): Track[] {
 
 interface GroqResult {
   artists: string[]
+  deep_cuts: string[]
   discogs: {
     genre?: string
     style?: string
@@ -75,6 +76,7 @@ Extract music parameters and respond with a JSON object ONLY (no markdown):
 
 {
   "artists": ["Artist 1", ...],
+  "deep_cuts": ["Obscure Artist 1", ...],
   "discogs": {
     "genre": "...",
     "style": "...",
@@ -87,7 +89,8 @@ Extract music parameters and respond with a JSON object ONLY (no markdown):
 }
 
 Rules:
-- "artists": 10-15 real artists matching the request, specific to era/country/style
+- "artists": 8-10 well-known/landmark artists matching the request (the obvious names a fan would cite)
+- "deep_cuts": 8-10 underground, rare, or cult artists from the same scene — NOT in "artists", NOT famous, genuinely obscure gems that only hardcore fans know. Think: session musicians who led their own projects, regional artists, one-album wonders, forgotten labels.
 - "discogs.genre": one of: ${DISCOGS_GENRES.join(", ")}
 - "discogs.style": specific Discogs subgenre (e.g. "Modal", "Bossa Nova", "Detroit Techno", "Dub")
 - "discogs.country": Discogs country name (e.g. "Italy", "France", "US", "UK", "Germany") — omit if not mentioned
@@ -96,8 +99,8 @@ Rules:
 - "mood": one of: chill, energetic, focus, melancholic, upbeat
 
 Examples:
-- "jazz italiano anni 70" → {"artists":["Enrico Rava","Franco D'Andrea","Marcello Melis","Giorgio Gaslini","Area","Pepi Lemer","Gaetano Liguori"],"discogs":{"genre":"Jazz","style":"Modal","country":"Italy","year_start":"1970","year_end":"1979"},"fallback_genres":["Jazz"],"mood":"chill"}
-- "techno berlinese anni 90" → {"artists":["Basic Channel","Maurizio","Monolake","Robert Hood","Tresor"],"discogs":{"genre":"Electronic","style":"Minimal Techno","country":"Germany","year_start":"1990","year_end":"1999"},"fallback_genres":["Techno","Electronic"],"mood":"energetic"}`
+- "jazz italiano anni 70" → {"artists":["Enrico Rava","Franco D'Andrea","Giorgio Gaslini","Area","Pepi Lemer"],"deep_cuts":["Gaetano Liguori","Giancarlo Schiaffini","Bruno Tommaso","Gruppo Romano Free Jazz","Lino Patruno","Eje Thelin","Mario Schiano","Antonello Salis"],"discogs":{"genre":"Jazz","style":"Modal","country":"Italy","year_start":"1970","year_end":"1979"},"fallback_genres":["Jazz"],"mood":"chill"}
+- "techno berlinese anni 90" → {"artists":["Basic Channel","Maurizio","Monolake","Robert Hood"],"deep_cuts":["Porter Ricks","Substance","Vainqueur","Scion","Enforcement","Cyrus","Jodey Kendrick","Dj Rolando"],"discogs":{"genre":"Electronic","style":"Minimal Techno","country":"Germany","year_start":"1990","year_end":"1999"},"fallback_genres":["Techno","Electronic"],"mood":"energetic"}`
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -109,7 +112,7 @@ Examples:
       model: "llama-3.3-70b-versatile",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.3,
-      max_tokens: 600,
+      max_tokens: 900,
       response_format: { type: "json_object" },
     }),
   })
@@ -125,12 +128,16 @@ Examples:
 
   const allGenres = ALL_GENRES as readonly string[]
   const fallback_genres = (parsed.fallback_genres ?? []).filter((g) => allGenres.includes(g))
-  const artists = (parsed.artists ?? []).filter(
-    (a) => typeof a === "string" && a.length > 1 && !isStockArtist(a)
-  )
+  const filterArtists = (arr: unknown[]) =>
+    arr.filter((a): a is string => typeof a === "string" && a.length > 1 && !isStockArtist(a))
+
+  const artists = filterArtists(parsed.artists ?? [])
+  const deep_cuts = filterArtists(parsed.deep_cuts ?? [])
+    .filter((a) => !artists.includes(a)) // no overlap
 
   return {
     artists,
+    deep_cuts,
     discogs: parsed.discogs ?? {},
     fallback_genres: fallback_genres.length > 0 ? fallback_genres : [...allGenres],
     mood,
@@ -147,6 +154,7 @@ export async function GET(req: NextRequest) {
   )
 
   let groqArtists: string[] = []
+  let groqDeepCuts: string[] = []
   let discogsParams: GroqResult["discogs"] = {}
   let fallbackGenres: string[] = [...ALL_GENRES]
   let mood: Mood = "chill"
@@ -155,6 +163,7 @@ export async function GET(req: NextRequest) {
     try {
       const result = await queryGroq(q)
       groqArtists = result.artists
+      groqDeepCuts = result.deep_cuts
       discogsParams = result.discogs
       fallbackGenres = result.fallback_genres
       mood = result.mood
@@ -167,13 +176,12 @@ export async function GET(req: NextRequest) {
   const usedIds = new Set<number>()
 
   function addTracks(items: Track[], seedName: string, limit = 3) {
-    // Shuffle Monochrome results to avoid always picking same top tracks
     const pool = shuffle([...filterByArtistMatch(items, seedName)])
     let added = 0
     for (const t of pool) {
       if (tracks.length >= 30 || added >= limit) break
       if (!t.id || usedIds.has(t.id)) continue
-      if (seenIds.has(t.id)) continue   // skip already-heard tracks
+      if (seenIds.has(t.id)) continue
       if (isStockArtist(t.artist)) continue
       usedIds.add(t.id)
       tracks.push(t)
@@ -181,19 +189,31 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // STEP 1: Groq-suggested artists → search directly on Monochrome
+  // STEP 1: Well-known Groq artists → 2 tracks each (leave room for deep cuts)
   if (groqArtists.length > 0) {
-    const artistSearches = await Promise.allSettled(
-      groqArtists.slice(0, 15).map((a) => searchArtist(a))
+    const searches = await Promise.allSettled(
+      groqArtists.slice(0, 10).map((a) => searchArtist(a))
     )
-    for (let i = 0; i < artistSearches.length; i++) {
-      const r = artistSearches[i]
+    for (let i = 0; i < searches.length; i++) {
+      const r = searches[i]
       if (r.status !== "fulfilled") continue
-      addTracks(r.value, groqArtists[i])
+      addTracks(r.value, groqArtists[i], 2)
     }
   }
 
-  // STEP 2: Discogs targeted query (genre + style + country + year range) → Monochrome
+  // STEP 2: Deep cuts — obscure/cult artists, up to 3 tracks each
+  if (groqDeepCuts.length > 0) {
+    const searches = await Promise.allSettled(
+      groqDeepCuts.slice(0, 10).map((a) => searchArtist(a))
+    )
+    for (let i = 0; i < searches.length; i++) {
+      const r = searches[i]
+      if (r.status !== "fulfilled") continue
+      addTracks(r.value, groqDeepCuts[i], 3)
+    }
+  }
+
+  // STEP 3: Discogs targeted query → fills remaining slots
   if (tracks.length < 20 && Object.keys(discogsParams).length > 0) {
     const discogsArtists = await getArtistsByDiscogParams({
       genre:     discogsParams.genre,
@@ -203,25 +223,25 @@ export async function GET(req: NextRequest) {
       yearEnd:   discogsParams.year_end,
     })
     const realArtists = discogsArtists.filter((a) => !isStockArtist(a))
-    const discogsSearches = await Promise.allSettled(
+    const searches = await Promise.allSettled(
       realArtists.slice(0, 20).map((a) => searchArtist(a))
     )
-    for (let i = 0; i < discogsSearches.length; i++) {
-      const r = discogsSearches[i]
+    for (let i = 0; i < searches.length; i++) {
+      const r = searches[i]
       if (r.status !== "fulfilled") continue
       addTracks(r.value, realArtists[i])
     }
   }
 
-  // STEP 3: Generic Discogs fallback if still too few
+  // STEP 4: Generic fallback if still too few tracks
   if (tracks.length < 15) {
     const fallbackArtists = await getArtistsByGenreAndMood(fallbackGenres, mood)
     const realFallback = fallbackArtists.filter((a) => !isStockArtist(a))
-    const fallbackSearches = await Promise.allSettled(
+    const searches = await Promise.allSettled(
       realFallback.slice(0, 15).map((a) => searchArtist(a))
     )
-    for (let i = 0; i < fallbackSearches.length; i++) {
-      const r = fallbackSearches[i]
+    for (let i = 0; i < searches.length; i++) {
+      const r = searches[i]
       if (r.status !== "fulfilled") continue
       addTracks(r.value, realFallback[i])
     }
