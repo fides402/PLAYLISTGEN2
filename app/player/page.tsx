@@ -6,7 +6,6 @@ import { useStore } from "@/lib/store"
 import { AudioPlayer, seekRef } from "@/components/AudioPlayer"
 import { TrackCard } from "@/components/TrackCard"
 import { MOODS } from "@/lib/types"
-import { encodePlaylist } from "@/lib/share"
 import type { Track, MoodConfig } from "@/lib/types"
 
 function fmt(secs: number) {
@@ -473,15 +472,24 @@ export default function PlayerPage() {
     } catch { /* silent */ } finally { setMixingId(null) }
   }, [mixingId, setPlaylist, setIsPlaying])
 
-  const handleShare = useCallback(() => {
+  const handleShare = useCallback(async () => {
     const pl = useStore.getState().playlist
     if (pl.length === 0) return
-    const token = encodePlaylist(pl)
-    const url   = `${window.location.origin}/share/${token}`
-    navigator.clipboard.writeText(url).then(() => {
+    try {
+      const res = await fetch("/api/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tracks: pl }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const { id } = await res.json() as { id: string }
+      const url = `${window.location.origin}/share/${id}`
+      await navigator.clipboard.writeText(url)
       setShareCopied(true)
       setTimeout(() => setShareCopied(false), 2500)
-    }).catch(() => {})
+    } catch (err) {
+      console.error("[share]", err)
+    }
   }, [])
 
   const queuePanelProps: QueuePanelProps = {
