@@ -96,10 +96,13 @@ interface GroqResult {
 }
 
 /**
- * Second Groq pass — fires right after Pass 1, in parallel with Steps 1-3.
- * Given the original query and the artists already found, it returns a fresh
- * batch of even more obscure artists. Higher temperature → more creative digs.
- * Resolves in ~500 ms; awaited in Step 2c where it is already done.
+ * Groq Pass 2 — "streaming safety net".
+ * Fires right after Pass 1, in parallel with Steps 0-2 (~500 ms).
+ * Purpose: find artists who share the EXACT sonic aesthetic of the request
+ * but are CONFIRMED available on major streaming platforms.
+ * Pass 1 covers scene-specific ideals (may not be on Tidal).
+ * Pass 2 covers style-compatible artists that ARE on Tidal — so the
+ * playlist always has content even when niche artists aren't available.
  */
 async function queryGroqDeepPass(
   userQuery: string,
@@ -107,20 +110,20 @@ async function queryGroqDeepPass(
 ): Promise<string[]> {
   if (!GROQ_KEY) return []
   const excluded = alreadyFound.slice(0, 25).join(", ")
-  const prompt = `You are a music archaeologist specialising in deep cuts and obscure records.
-The user wants: "${userQuery}"
+  const prompt = `You are a streaming music specialist. The user wants: "${userQuery}"
 
-These artists are ALREADY in the playlist — do NOT repeat them:
+These artists are already being searched (they may not be on streaming services):
 ${excluded}
 
-Find 10-15 MORE artists that fit the EXACT same sonic aesthetic but are even more underground:
-- Session musicians who released solo records
-- Regional / local acts never widely known internationally
-- One-album wonders, cult acts, B-list artists from the same scene and era
-- Artists who influenced the well-known names but stayed underground
-- Avoid generic "smooth jazz" or stock-music acts
+Find 10-15 artists who:
+1. Share the EXACT same sonic aesthetic — same tempo, mood, instrumentation, production philosophy
+2. Are DEFINITELY available on major streaming platforms (Tidal, Spotify, Apple Music)
+3. Are NOT in the excluded list above
+4. Can be from ANY country or era as long as the sonic world matches
 
-Respond with JSON ONLY (no markdown): {"deep_cuts": ["Artist 1", "Artist 2", ...]}`
+Priority: artists with substantial digital catalogs, international recognition, or major-label releases. The goal is to guarantee playable tracks even if the niche artists above aren't on streaming.
+
+JSON ONLY (no markdown): {"artists": ["Artist 1", "Artist 2", ...]}`
 
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -132,7 +135,7 @@ Respond with JSON ONLY (no markdown): {"deep_cuts": ["Artist 1", "Artist 2", ...
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
         messages: [{ role: "user", content: prompt }],
-        temperature: 0.7,
+        temperature: 0.5,
         max_tokens: 400,
         response_format: { type: "json_object" },
       }),
@@ -140,8 +143,9 @@ Respond with JSON ONLY (no markdown): {"deep_cuts": ["Artist 1", "Artist 2", ...
     if (!res.ok) return []
     const data = await res.json()
     const text: string = data.choices?.[0]?.message?.content ?? ""
-    const parsed = JSON.parse(text) as { deep_cuts?: unknown[] }
-    return (parsed.deep_cuts ?? [])
+    const parsed = JSON.parse(text) as { artists?: unknown[]; deep_cuts?: unknown[] }
+    const raw = parsed.artists ?? parsed.deep_cuts ?? []
+    return (raw as unknown[])
       .filter((a): a is string => typeof a === "string" && a.length > 1)
       .filter((a) => !isStockArtist(a))
   } catch {
@@ -427,52 +431,70 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // STEP 3: Label-based Discogs discovery → album search
-  if (tracks.length < 22 && groqLabels.length > 0) {
-    const labelReleases = await getArtistsByLabel(groqLabels)
-    const fresh = labelReleases.filter((r) => !isStockArtist(r.artist))
-    const searches = await Promise.allSettled(
-      fresh.slice(0, 16).map((r) => searchAlbum(r.artist, r.album))
-    )
-    for (let i = 0; i < searches.length; i++) {
-      const r = searches[i]
-      if (r.status !== "fulfilled") continue
-      addTracks(r.value, fresh[i].artist)
-    }
-  }
-
-  // STEP 4: Discogs targeted params → album search
-  if (tracks.length < 20 && Object.keys(discogsParams).length > 0) {
-    const discogsReleases = await getArtistsByDiscogParams({
-      genre:     discogsParams.genre,
-      style:     discogsParams.style,
-      country:   discogsParams.country,
-      yearStart: discogsParams.year_start,
-      yearEnd:   discogsParams.year_end,
-    })
-    const fresh = discogsReleases.filter((r) => !isStockArtist(r.artist))
+  // Helper: run a batch of Discogs releases through Monochrome and add to pool
+  async function addFromDiscogs(releases: { artist: string; album: string }[], limit = 3) {
+    const fresh = releases.filter((r) => !isStockArtist(r.artist))
     const searches = await Promise.allSettled(
       fresh.slice(0, 20).map((r) => searchAlbum(r.artist, r.album))
     )
     for (let i = 0; i < searches.length; i++) {
       const r = searches[i]
       if (r.status !== "fulfilled") continue
-      addTracks(r.value, fresh[i].artist)
+      addTracks(r.value, fresh[i].artist, limit)
     }
   }
 
-  // STEP 5: Generic fallback if still too few tracks
-  if (tracks.length < 15) {
-    const fallbackReleases = await getArtistsByGenreAndMood(fallbackGenres, mood)
-    const fresh = fallbackReleases.filter((r) => !isStockArtist(r.artist))
-    const searches = await Promise.allSettled(
-      fresh.slice(0, 15).map((r) => searchAlbum(r.artist, r.album))
+  // ── STEP 3: Label-based Discogs — always fires when labels provided ──────────
+  // Labels are strong quality/style signals; no track-count gate so they always
+  // contribute even when early artist searches are exhausted.
+  if (groqLabels.length > 0) {
+    await addFromDiscogs(await getArtistsByLabel(groqLabels), 3)
+  }
+
+  // ── STEP 4: Cascading Discogs params — three levels of specificity ───────────
+  // Level 4a: full params (genre + style + country + years) — most specific
+  // Level 4b: drop country — wider geographic net, same style/era
+  // Level 4c: drop years too — all eras of the style
+  // Each level fires only when we still need more tracks, ensuring the playlist
+  // stays within the requested sonic world even when niche artists aren't on Tidal.
+
+  // 4a: full specificity
+  if (tracks.length < 30 && Object.keys(discogsParams).length > 0) {
+    await addFromDiscogs(await getArtistsByDiscogParams({
+      genre:     discogsParams.genre,
+      style:     discogsParams.style,
+      country:   discogsParams.country,
+      yearStart: discogsParams.year_start,
+      yearEnd:   discogsParams.year_end,
+    }))
+  }
+
+  // 4b: same style + years, no country restriction
+  if (tracks.length < 22 && discogsParams.country && (discogsParams.genre || discogsParams.style)) {
+    await addFromDiscogs(await getArtistsByDiscogParams({
+      genre:     discogsParams.genre,
+      style:     discogsParams.style,
+      yearStart: discogsParams.year_start,
+      yearEnd:   discogsParams.year_end,
+    }))
+  }
+
+  // 4c: same style, any country, any era
+  if (tracks.length < 15 && (discogsParams.genre || discogsParams.style)) {
+    await addFromDiscogs(await getArtistsByDiscogParams({
+      genre:  discogsParams.genre,
+      style:  discogsParams.style,
+    }))
+  }
+
+  // ── STEP 5: True last resort — genre + mood via style map ───────────────────
+  // Only fires when the entire Discogs cascade above couldn't fill the playlist.
+  // Uses niche subgenre styles from GENRE_MOOD_STYLES so results stay specific.
+  if (tracks.length < 8) {
+    await addFromDiscogs(
+      await getArtistsByGenreAndMood(fallbackGenres, mood),
+      2
     )
-    for (let i = 0; i < searches.length; i++) {
-      const r = searches[i]
-      if (r.status !== "fulfilled") continue
-      addTracks(r.value, fresh[i].artist)
-    }
   }
 
   // ── Year-range post-filter ──────────────────────────────────────────────────
