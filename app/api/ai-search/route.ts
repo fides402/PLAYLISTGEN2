@@ -51,14 +51,26 @@ function isStockArtist(name: string): boolean {
 
 function filterByArtistMatch(tracks: Track[], seedArtist: string): Track[] {
   const seed = seedArtist.toLowerCase().trim()
-  // Keep words ≥ 3 chars — catches names like "Jay", "Big" while skipping "a", "of"
+  if (!seed) return tracks
   const words = seed.split(/\s+/).filter((w) => w.length >= 3)
   if (words.length === 0) return tracks
+
   return tracks.filter((t) => {
     const a = t.artist.toLowerCase()
-    // ALL seed words must appear — prevents false positives like "Lamar Jackson"
-    // matching a "Kendrick Lamar" seed because "lamar" is a substring
-    return words.every((w) => a.includes(w))
+
+    // Tier 1: full seed is a substring (e.g. seed="ennio morricone", artist="ennio morricone")
+    if (a.includes(seed)) return true
+
+    // Tier 2: all words match (catches "Ennio Morricone & Orchestra")
+    if (words.every((w) => a.includes(w))) return true
+
+    // Tier 3: longest significant word matches — handles cases where Tidal/Monochrome
+    // stores the artist by last name only (e.g. "Morricone" instead of "Ennio Morricone",
+    // or "Rota" instead of "Nino Rota"). Threshold ≥ 4 chars to avoid noise.
+    const longest = words.reduce((best, w) => (w.length > best.length ? w : best), "")
+    if (longest.length >= 4 && a.includes(longest)) return true
+
+    return false
   })
 }
 
@@ -140,6 +152,17 @@ FIELD RULES:
   upbeat = BPM 100-130, positive, feel-good, fun
   energetic = BPM 120-160+, intense, hype, aggressive, "energico", "carico"
 
+OST / COLONNA SONORA QUERIES — special rules:
+When the request mentions "ost", "colonna sonora", "soundtrack", "score", "musica da film":
+- "albums": list SPECIFIC soundtrack albums with the COMPOSER as artist (not the film director).
+  Italian 70s composers: Ennio Morricone, Nino Rota, Piero Piccioni, Luis Bacalov, Riz Ortolani,
+  Armando Trovajoli, Pino Donaggio, Goblin, Franco Micalizzi, Carlo Savina, Stelvio Cipriani.
+- "discogs.genre": "Classical" or "Jazz" (whichever fits the style)
+- "discogs.style": "Soundtrack" (this is a valid Discogs style tag)
+- "discogs.country": set if request specifies a country (e.g. "Italy" for Italian OST)
+- "labels": Italian OST labels include CAM, Beat Records, Cinevox, PDU, RCA Italiana, Fonit Cetra, Bam
+- Do NOT use "Funk / Soul" or "Hip Hop" for OST queries.
+
 STYLE-MATCHING EXAMPLES:
 - "stile di Alchemist" → grimy NY underground, soul/jazz samples, dusty drums, 80-95 BPM, dark atmosphere → albums: Griselda, Boldy James, Mach-Hommy, Conway, Westside Gunn, Roc Marciano
 - "stile di Larry June" → smooth West Coast, jazzy, laid-back, organic samples, positive vibes → albums: Larry June, Kaytranada-adjacent, Jay Worthy, Cardo Got Wings, Sango
@@ -148,6 +171,7 @@ STYLE-MATCHING EXAMPLES:
 
 CONCRETE EXAMPLES:
 - "jazz italiano anni 70" → {"albums":[{"artist":"Enrico Rava","album":"The Pilgrim And The Stars"},{"artist":"Giorgio Gaslini","album":"Schizophonia"},{"artist":"Area","album":"Arbeit Macht Frei"},{"artist":"Pepi Lemer","album":"Postcard"}],"artists":["Franco D'Andrea","Mario Schiano"],"deep_cuts":["Gaetano Liguori","Giancarlo Schiaffini","Bruno Tommaso","Lino Patruno","Antonello Salis"],"labels":["Horo","Black Saint","Soul Note","Carosello","Fonit Cetra"],"discogs":{"genre":"Jazz","style":"Post Bop","country":"Italy","year_start":"1970","year_end":"1979"},"fallback_genres":["Jazz"],"mood":"chill"}
+- "ost italiano anni 70" → {"albums":[{"artist":"Ennio Morricone","album":"Per un pugno di dollari"},{"artist":"Nino Rota","album":"Il Padrino"},{"artist":"Piero Piccioni","album":"Queimada"},{"artist":"Luis Bacalov","album":"Il postino"},{"artist":"Riz Ortolani","album":"Mondo Cane"},{"artist":"Goblin","album":"Profondo Rosso"},{"artist":"Armando Trovajoli","album":"Scipione detto anche l'Africano"},{"artist":"Stelvio Cipriani","album":"Anonimo Veneziano"},{"artist":"Franco Micalizzi","album":"Lo chiamavano Trinità"},{"artist":"Ennio Morricone","album":"C'era una volta il West"}],"artists":["Pino Donaggio","Carlo Savina","Carlo Rustichelli"],"deep_cuts":["Alessandro Alessandroni","Gianni Ferrio","Gianni Marchetti","Bruno Nicolai","Piero Umiliani"],"labels":["CAM","Cinevox","Beat Records","PDU","RCA Italiana","Fonit Cetra"],"discogs":{"genre":"Classical","style":"Soundtrack","country":"Italy","year_start":"1970","year_end":"1979"},"fallback_genres":["Classical","Jazz"],"mood":"chill"}
 - "rap americano 2022-2024" → {"albums":[{"artist":"Kendrick Lamar","album":"Mr. Morale & The Big Steppers"},{"artist":"Drake","album":"Her Loss"},{"artist":"21 Savage","album":"american dream"},{"artist":"Tyler the Creator","album":"Call Me If You Get Lost"}],"artists":["Lil Baby","Gunna"],"deep_cuts":["Armani Caesar","Boldy James","Stove God Cooks","Rome Streetz"],"labels":["Top Dawg Entertainment","Dreamville","EMPIRE","Interscope"],"discogs":{"genre":"Hip Hop","style":"Trap","year_start":"2022","year_end":"2024"},"fallback_genres":["Hip Hop"],"mood":"energetic"}
 - "stile di Alchemist e Larry June" → {"albums":[{"artist":"Boldy James","album":"The Price of Tea in China"},{"artist":"Westside Gunn","album":"Hitler Wears Hermes 8"},{"artist":"Larry June","album":"Cruise Us"},{"artist":"Jay Worthy","album":"LNDN DRGS"},{"artist":"Mach-Hommy","album":"Pray for Haiti"}],"artists":["Roc Marciano","Your Old Droog"],"deep_cuts":["Stove God Cooks","Ransom","Flee Lord","Rome Streetz","Armani Caesar"],"labels":["EMPIRE","Griselda Records","ALC Records","Nature Sounds"],"discogs":{"genre":"Hip Hop","style":"Boom Bap","year_start":"2018","year_end":"2024"},"fallback_genres":["Hip Hop"],"mood":"chill"}`
 
