@@ -6,6 +6,14 @@ const MONO_URL =
 // Skip interludes, skits, jingles — anything under 90 seconds
 const MIN_DURATION_SECS = 90
 
+// Strip type beats, karaoke, cover versions and similar noise from search results
+const FAKE_TITLE_RE =
+  /(type beat|free beat|\bbeat\s*\d{4}|instrumental beat|prod\.?\s*by\b|\(karaoke\)|\bkaraoke\b|cover version|cover tribute|backing track|tribute to\b)/i
+
+function isFakeRawTrack(item: Record<string, unknown>): boolean {
+  return FAKE_TITLE_RE.test((item.title as string) || "")
+}
+
 function buildCoverUrl(cover: string | null | undefined): string | null {
   if (!cover) return null
   // Tidal cover UUIDs use hyphens; the CDN path uses forward slashes
@@ -32,16 +40,35 @@ export function normalizeTrack(item: Record<string, unknown>): Track | null {
     (item.coverArt as string) ||
     null
 
-  // Extract release year from album releaseDate or fallback fields
-  const rawDate =
-    (albumObj?.releaseDate as string | undefined) ||
-    (albumObj?.releaseYear as string | number | undefined) ||
-    (item.streamStartDate as string | undefined) ||
-    null
+  // Year extraction — order confirmed by live Monochrome API inspection:
+  // 1. streamStartDate  (always present, e.g. "2023-10-06T00:00:00.000+0000")
+  // 2. copyright string (e.g. "℗ 2023 Republic Records")
+  // 3. albumObj fields  (generally absent in Monochrome responses, kept as safety net)
   let year: number | undefined
-  if (rawDate) {
-    const parsed = parseInt(String(rawDate).substring(0, 4))
-    if (!isNaN(parsed) && parsed > 1900 && parsed <= 2099) year = parsed
+
+  const sd = item.streamStartDate as string | null | undefined
+  if (typeof sd === "string" && sd.length >= 4) {
+    const p = parseInt(sd.substring(0, 4))
+    if (!isNaN(p) && p > 1900 && p <= 2099) year = p
+  }
+
+  if (!year) {
+    const copy = item.copyright as string | undefined
+    if (copy) {
+      const m = copy.match(/[℗©]\s*(\d{4})/)
+      if (m) { const p = parseInt(m[1]); if (p > 1900 && p <= 2099) year = p }
+    }
+  }
+
+  if (!year) {
+    const raw =
+      (albumObj?.releaseDate as string | undefined) ||
+      (albumObj?.releaseYear as string | number | undefined) ||
+      null
+    if (raw) {
+      const p = parseInt(String(raw).substring(0, 4))
+      if (!isNaN(p) && p > 1900 && p <= 2099) year = p
+    }
   }
 
   return {
@@ -82,6 +109,7 @@ export async function searchTracks(query: string): Promise<Track[]> {
     if (!res.ok) return []
     const data = await res.json()
     return extractItems(data)
+      .filter((item) => !isFakeRawTrack(item))
       .map(normalizeTrack)
       .filter((t): t is Track => !!t && isLongEnough(t))
   } catch {
@@ -102,6 +130,7 @@ export async function searchArtist(name: string): Promise<Track[]> {
     if (!res.ok) return []
     const data = await res.json()
     return extractItems(data)
+      .filter((item) => !isFakeRawTrack(item))
       .map(normalizeTrack)
       .filter((t): t is Track => !!t && isLongEnough(t))
   } catch {
@@ -125,6 +154,7 @@ export async function searchAlbum(artist: string, album: string): Promise<Track[
     if (!res.ok) return []
     const data = await res.json()
     return extractItems(data)
+      .filter((item) => !isFakeRawTrack(item))
       .map(normalizeTrack)
       .filter((t): t is Track => !!t && isLongEnough(t))
   } catch {

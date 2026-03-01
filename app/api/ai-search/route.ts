@@ -5,6 +5,7 @@ import {
   getArtistsByLabel,
 } from "@/lib/discogs"
 import { searchArtist, searchAlbum } from "@/lib/monochrome"
+import { findRelatedArtists } from "@/lib/musicbrainz"
 import { ALL_GENRES } from "@/lib/types"
 import type { Track, Mood } from "@/lib/types"
 
@@ -50,10 +51,14 @@ function isStockArtist(name: string): boolean {
 
 function filterByArtistMatch(tracks: Track[], seedArtist: string): Track[] {
   const seed = seedArtist.toLowerCase().trim()
-  const words = seed.split(/\s+/).filter((w) => w.length >= 4)
+  // Keep words ≥ 3 chars — catches names like "Jay", "Big" while skipping "a", "of"
+  const words = seed.split(/\s+/).filter((w) => w.length >= 3)
+  if (words.length === 0) return tracks
   return tracks.filter((t) => {
     const a = t.artist.toLowerCase()
-    return words.length === 0 || words.some((w) => a.includes(w))
+    // ALL seed words must appear — prevents false positives like "Lamar Jackson"
+    // matching a "Kendrick Lamar" seed because "lamar" is a substring
+    return words.every((w) => a.includes(w))
   })
 }
 
@@ -252,6 +257,15 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ── MusicBrainz lookup fires early, in parallel with Steps 0-2 ──────────────
+  // MB makes 2 sequential requests with a 1.1s sleep (rate-limit) → ~1.5s total.
+  // Steps 0-2 take ~2-3s (parallel Monochrome calls), so MB is ready by Step 2b.
+  // We query the top Groq artist; 24h server cache absorbs repeat lookups.
+  const mbSeed = groqArtists[0] ?? groqAlbums[0]?.artist ?? null
+  const mbPromise: Promise<string[]> = mbSeed
+    ? findRelatedArtists(mbSeed).catch(() => [])
+    : Promise.resolve([])
+
   // STEP 0: Specific Groq albums → searchAlbum (highest precision, year-aware)
   if (groqAlbums.length > 0) {
     const searches = await Promise.allSettled(
@@ -285,6 +299,23 @@ export async function GET(req: NextRequest) {
       const r = searches[i]
       if (r.status !== "fulfilled") continue
       addTracks(r.value, groqDeepCuts[i], 3)
+    }
+  }
+
+  // STEP 2b: MusicBrainz related artists — organic expansion via relationship graph
+  // Finds collaborators, band members, influences, producers of the seed artist.
+  // MB result should already be resolved here (fired in parallel with Step 0).
+  {
+    const mbRelated = (await mbPromise).filter((a) => !isStockArtist(a))
+    if (mbRelated.length > 0) {
+      const searches = await Promise.allSettled(
+        mbRelated.slice(0, 8).map((a) => searchArtist(a))
+      )
+      for (let i = 0; i < searches.length; i++) {
+        const r = searches[i]
+        if (r.status !== "fulfilled") continue
+        addTracks(r.value, mbRelated[i], 2)
+      }
     }
   }
 
