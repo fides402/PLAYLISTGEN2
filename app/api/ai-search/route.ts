@@ -95,6 +95,60 @@ interface GroqResult {
   mood: Mood
 }
 
+/**
+ * Second Groq pass — fires right after Pass 1, in parallel with Steps 1-3.
+ * Given the original query and the artists already found, it returns a fresh
+ * batch of even more obscure artists. Higher temperature → more creative digs.
+ * Resolves in ~500 ms; awaited in Step 2c where it is already done.
+ */
+async function queryGroqDeepPass(
+  userQuery: string,
+  alreadyFound: string[]
+): Promise<string[]> {
+  if (!GROQ_KEY) return []
+  const excluded = alreadyFound.slice(0, 25).join(", ")
+  const prompt = `You are a music archaeologist specialising in deep cuts and obscure records.
+The user wants: "${userQuery}"
+
+These artists are ALREADY in the playlist — do NOT repeat them:
+${excluded}
+
+Find 10-15 MORE artists that fit the EXACT same sonic aesthetic but are even more underground:
+- Session musicians who released solo records
+- Regional / local acts never widely known internationally
+- One-album wonders, cult acts, B-list artists from the same scene and era
+- Artists who influenced the well-known names but stayed underground
+- Avoid generic "smooth jazz" or stock-music acts
+
+Respond with JSON ONLY (no markdown): {"deep_cuts": ["Artist 1", "Artist 2", ...]}`
+
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${GROQ_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7,
+        max_tokens: 400,
+        response_format: { type: "json_object" },
+      }),
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    const text: string = data.choices?.[0]?.message?.content ?? ""
+    const parsed = JSON.parse(text) as { deep_cuts?: unknown[] }
+    return (parsed.deep_cuts ?? [])
+      .filter((a): a is string => typeof a === "string" && a.length > 1)
+      .filter((a) => !isStockArtist(a))
+  } catch {
+    return []
+  }
+}
+
 async function queryGroq(userQuery: string): Promise<GroqResult> {
   const prompt = `You are a music curation expert and Discogs specialist. Your goal is to identify music with PRECISELY the right sonic aesthetic, tempo, and era for the user's request.
 
@@ -281,6 +335,20 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ── Groq Pass 2 fires right after Pass 1, in parallel with Steps 1-3 ────────
+  // Pass 2 is a fast focused call (max_tokens=400) → resolves in ~500ms.
+  // Steps 1-3 (parallel Monochrome calls) take ~2-3s, so Pass 2 is ready by Step 2c.
+  // We hand it the full list of artists already found so it digs deeper without repeating.
+  const pass1Artists = [
+    ...groqAlbums.map((a) => a.artist),
+    ...groqArtists,
+    ...groqDeepCuts,
+  ]
+  const groqPass2Promise: Promise<string[]> =
+    pass1Artists.length > 0
+      ? queryGroqDeepPass(q, pass1Artists).catch(() => [])
+      : Promise.resolve([])
+
   // ── MusicBrainz lookup fires early, in parallel with Steps 0-2 ──────────────
   // MB makes 2 sequential requests with a 1.1s sleep (rate-limit) → ~1.5s total.
   // Steps 0-2 take ~2-3s (parallel Monochrome calls), so MB is ready by Step 2b.
@@ -339,6 +407,22 @@ export async function GET(req: NextRequest) {
         const r = searches[i]
         if (r.status !== "fulfilled") continue
         addTracks(r.value, mbRelated[i], 2)
+      }
+    }
+  }
+
+  // STEP 2c: Groq Pass 2 — ultra-deep cuts not in Pass 1
+  // Already resolved by now (fired in parallel with Steps 1-3).
+  {
+    const pass2Artists = (await groqPass2Promise).filter((a) => !isStockArtist(a))
+    if (pass2Artists.length > 0) {
+      const searches = await Promise.allSettled(
+        pass2Artists.slice(0, 12).map((a) => searchArtist(a))
+      )
+      for (let i = 0; i < searches.length; i++) {
+        const r = searches[i]
+        if (r.status !== "fulfilled") continue
+        addTracks(r.value, pass2Artists[i], 2)
       }
     }
   }
