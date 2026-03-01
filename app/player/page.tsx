@@ -258,13 +258,13 @@ interface QueuePanelProps {
   handleSearch: (e: React.FormEvent) => void; handleRegenerate: () => void
   onSelectTrack: (i: number) => void; onChangeMood: () => void
   onMix: (track: Track) => void; mixingId: number | null
-  onShare: () => void
+  onShare: () => void; isSharing: boolean
 }
 
 function QueuePanel({
   playlist, currentIndex, moodConfig, searchQuery, setSearchQuery,
   isSearching, isRegenerating, handleSearch, handleRegenerate,
-  onSelectTrack, onChangeMood, onMix, mixingId, onShare,
+  onSelectTrack, onChangeMood, onMix, mixingId, onShare, isSharing,
 }: QueuePanelProps) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -274,9 +274,12 @@ function QueuePanel({
           <div className="flex items-center gap-3">
             <button
               onClick={onShare}
-              className="text-xs text-gray-600 hover:text-gray-300 transition-colors"
+              disabled={isSharing}
+              className="text-xs text-gray-600 hover:text-gray-300 transition-colors disabled:opacity-40 flex items-center gap-1.5"
             >
-              Share ↗
+              {isSharing
+                ? <><span className="block w-2.5 h-2.5 rounded-full border border-gray-500 border-t-transparent animate-spin" />Sharing…</>
+                : "Share ↗"}
             </button>
             <button onClick={onChangeMood} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">New search</button>
           </div>
@@ -339,6 +342,7 @@ export default function PlayerPage() {
   const [sonicDesc, setSonicDesc]           = useState("")
   const [shareUrl, setShareUrl]             = useState("")   // URL to show in share overlay
   const [shareCopied, setShareCopied]       = useState(false) // "Copia" feedback in overlay
+  const [isSharing, setIsSharing]           = useState(false) // Share button loading state
 
   const lastRecId  = useRef<number | null>(null)
   const isExtending = useRef(false)
@@ -485,6 +489,7 @@ export default function PlayerPage() {
   const handleShare = useCallback(async () => {
     const pl = useStore.getState().playlist
     if (pl.length === 0) return
+    setIsSharing(true)
     try {
       const res = await fetch("/api/share", {
         method: "POST",
@@ -498,6 +503,8 @@ export default function PlayerPage() {
       setShareUrl(`${window.location.origin}/share/${id}`)
     } catch (err) {
       console.error("[share]", err)
+    } finally {
+      setIsSharing(false)
     }
   }, [])
 
@@ -505,7 +512,7 @@ export default function PlayerPage() {
     playlist, currentIndex, moodConfig, searchQuery, setSearchQuery,
     isSearching, isRegenerating, handleSearch, handleRegenerate,
     onSelectTrack: handleSelectTrack, onChangeMood: () => router.push("/mood"),
-    onMix: handleMix, mixingId, onShare: handleShare,
+    onMix: handleMix, mixingId, onShare: handleShare, isSharing,
   }
 
   return (
