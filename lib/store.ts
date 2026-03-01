@@ -62,6 +62,16 @@ interface Store {
   // Last free-text search query (used by regenerate)
   lastSearchQuery: string
   setLastSearchQuery: (q: string) => void
+
+  // Ephemeral playback state (not persisted — managed by AudioPlayer)
+  playbackTime: number
+  playbackDuration: number
+  isBuffering: boolean
+  playbackError: string | null
+  setPlaybackTime: (t: number) => void
+  setPlaybackDuration: (d: number) => void
+  setIsBuffering: (v: boolean) => void
+  setPlaybackError: (e: string | null) => void
 }
 
 export const useStore = create<Store>()(
@@ -159,6 +169,15 @@ export const useStore = create<Store>()(
 
       lastSearchQuery: "",
       setLastSearchQuery: (q) => set({ lastSearchQuery: q }),
+
+      playbackTime: 0,
+      playbackDuration: 0,
+      isBuffering: false,
+      playbackError: null,
+      setPlaybackTime: (t) => set({ playbackTime: t }),
+      setPlaybackDuration: (d) => set({ playbackDuration: d }),
+      setIsBuffering: (v) => set({ isBuffering: v }),
+      setPlaybackError: (e) => set({ playbackError: e }),
     }),
     {
       name: "hifi-mood-store",
