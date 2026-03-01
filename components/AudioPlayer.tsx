@@ -114,17 +114,10 @@ export function AudioPlayer() {
       }
     }
     const onError = () => {
+      const code = audio.error?.code
+      setPlaybackError(code === 4 ? "Formato DASH — premi ⏭" : "Errore — premi ⏭")
       setIsBuffering(false)
       setIsPlaying(false)
-      setPlaybackError("Traccia non disponibile — salto al successivo…")
-      // Auto-advance after 2 s — gives time to see the message
-      setTimeout(() => {
-        const state = useStore.getState()
-        if (state.playbackError) {
-          state.setPlaybackError(null)
-          state.nextTrack()
-        }
-      }, 2000)
     }
 
     audio.addEventListener("timeupdate", onTimeUpdate)

@@ -50,16 +50,10 @@ function isStockArtist(name: string): boolean {
 
 function filterByArtistMatch(tracks: Track[], seedArtist: string): Track[] {
   const seed = seedArtist.toLowerCase().trim()
-  // Keep words ≥ 3 chars (avoids stop-words like "a", "of", "de" while keeping
-  // names like "Jay", "Big", etc.)
-  const words = seed.split(/\s+/).filter((w) => w.length >= 3)
-  if (words.length === 0) return tracks
+  const words = seed.split(/\s+/).filter((w) => w.length >= 4)
   return tracks.filter((t) => {
     const a = t.artist.toLowerCase()
-    // ALL seed words must appear in the artist string — prevents "some word"
-    // coincidence matches (e.g. "James" matching "James Brown" when seed is
-    // "Kendrick Lamar" just because "lamar" appears in another field)
-    return words.every((w) => a.includes(w))
+    return words.length === 0 || words.some((w) => a.includes(w))
   })
 }
 

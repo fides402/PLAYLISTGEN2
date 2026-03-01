@@ -39,31 +39,27 @@ export function encodePlaylist(tracks: Track[]): string {
     return s
   })
   const json = JSON.stringify(compact)
-  // btoa is available in browsers and Node.js 16+.
-  // We intentionally avoid Buffer.toString("base64url") because the browser
-  // Buffer polyfill bundled by Next.js does NOT support the "base64url" encoding,
-  // causing silent corruption of the token.
-  const b64 = typeof btoa !== "undefined"
-    ? btoa(unescape(encodeURIComponent(json)))
-    : Buffer.from(json, "utf-8").toString("base64")
-  // Convert standard base64 → base64url (URL-safe, no padding)
-  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")
+  // Node.js (server / API routes)
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(json).toString("base64url")
+  }
+  // Browser fallback
+  return btoa(unescape(encodeURIComponent(json)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "")
 }
 
 /** Decode a share token back into a Track array. Returns null on error. */
 export function decodePlaylist(token: string): Track[] | null {
   try {
-    // Convert base64url back to standard base64 (add padding if needed)
-    const b64 = token.replace(/-/g, "+").replace(/_/g, "/")
-    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4)
-
     let json: string
-    if (typeof atob !== "undefined") {
-      json = decodeURIComponent(escape(atob(padded)))
+    if (typeof Buffer !== "undefined") {
+      json = Buffer.from(token, "base64url").toString("utf-8")
     } else {
-      json = Buffer.from(padded, "base64").toString("utf-8")
+      const b64 = token.replace(/-/g, "+").replace(/_/g, "/")
+      json = decodeURIComponent(escape(atob(b64)))
     }
-
     const compact = JSON.parse(json) as SharedTrack[]
     if (!Array.isArray(compact) || compact.length === 0) return null
     return compact.map((s) => ({

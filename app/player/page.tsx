@@ -6,6 +6,7 @@ import { useStore } from "@/lib/store"
 import { AudioPlayer, seekRef } from "@/components/AudioPlayer"
 import { TrackCard } from "@/components/TrackCard"
 import { MOODS } from "@/lib/types"
+import { encodePlaylist } from "@/lib/share"
 import type { Track, MoodConfig } from "@/lib/types"
 
 function fmt(secs: number) {
@@ -258,13 +259,13 @@ interface QueuePanelProps {
   handleSearch: (e: React.FormEvent) => void; handleRegenerate: () => void
   onSelectTrack: (i: number) => void; onChangeMood: () => void
   onMix: (track: Track) => void; mixingId: number | null
-  onShare: () => void; isSharing: boolean
+  onShare: () => void; shareCopied: boolean
 }
 
 function QueuePanel({
   playlist, currentIndex, moodConfig, searchQuery, setSearchQuery,
   isSearching, isRegenerating, handleSearch, handleRegenerate,
-  onSelectTrack, onChangeMood, onMix, mixingId, onShare, isSharing,
+  onSelectTrack, onChangeMood, onMix, mixingId, onShare, shareCopied,
 }: QueuePanelProps) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -274,12 +275,9 @@ function QueuePanel({
           <div className="flex items-center gap-3">
             <button
               onClick={onShare}
-              disabled={isSharing}
-              className="text-xs text-gray-600 hover:text-gray-300 transition-colors disabled:opacity-40 flex items-center gap-1.5"
+              className="text-xs text-gray-600 hover:text-gray-300 transition-colors"
             >
-              {isSharing
-                ? <><span className="block w-2.5 h-2.5 rounded-full border border-gray-500 border-t-transparent animate-spin" />Sharing…</>
-                : "Share ↗"}
+              {shareCopied ? "✓ Copied!" : "Share ↗"}
             </button>
             <button onClick={onChangeMood} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">New search</button>
           </div>
@@ -340,9 +338,7 @@ export default function PlayerPage() {
   const [isLoadingRecs, setIsLoadingRecs]   = useState(false)
   const [mixingId, setMixingId]             = useState<number | null>(null)
   const [sonicDesc, setSonicDesc]           = useState("")
-  const [shareUrl, setShareUrl]             = useState("")   // URL to show in share overlay
-  const [shareCopied, setShareCopied]       = useState(false) // "Copia" feedback in overlay
-  const [isSharing, setIsSharing]           = useState(false) // Share button loading state
+  const [shareCopied, setShareCopied]       = useState(false)
 
   const lastRecId  = useRef<number | null>(null)
   const isExtending = useRef(false)
@@ -486,33 +482,22 @@ export default function PlayerPage() {
     } catch { /* silent */ } finally { setMixingId(null) }
   }, [mixingId, setPlaylist, setIsPlaying])
 
-  const handleShare = useCallback(async () => {
+  const handleShare = useCallback(() => {
     const pl = useStore.getState().playlist
     if (pl.length === 0) return
-    setIsSharing(true)
-    try {
-      const res = await fetch("/api/share", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tracks: pl }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const { id } = await res.json() as { id: string }
-      // Show share overlay — clipboard is written from a synchronous button
-      // click inside the overlay to avoid losing user-activation context on iOS
-      setShareUrl(`${window.location.origin}/share/${id}`)
-    } catch (err) {
-      console.error("[share]", err)
-    } finally {
-      setIsSharing(false)
-    }
+    const token = encodePlaylist(pl)
+    const url   = `${window.location.origin}/share/${token}`
+    navigator.clipboard.writeText(url).then(() => {
+      setShareCopied(true)
+      setTimeout(() => setShareCopied(false), 2500)
+    }).catch(() => {})
   }, [])
 
   const queuePanelProps: QueuePanelProps = {
     playlist, currentIndex, moodConfig, searchQuery, setSearchQuery,
     isSearching, isRegenerating, handleSearch, handleRegenerate,
     onSelectTrack: handleSelectTrack, onChangeMood: () => router.push("/mood"),
-    onMix: handleMix, mixingId, onShare: handleShare, isSharing,
+    onMix: handleMix, mixingId, onShare: handleShare, shareCopied,
   }
 
   return (
@@ -627,49 +612,6 @@ export default function PlayerPage() {
 
       {/* Desktop-only player bar */}
       <AudioPlayer />
-
-      {/* ─── Share overlay ─────────────────────────────────────────────────── */}
-      {/* Shown after generating the share link — clipboard is written from a  */}
-      {/* synchronous click so iOS Safari doesn't block the write.             */}
-      {shareUrl && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center px-4 pb-8 bg-black/60 backdrop-blur-sm"
-          onClick={() => { setShareUrl(""); setShareCopied(false) }}
-        >
-          <div
-            className="w-full max-w-sm rounded-2xl p-4 border border-white/10"
-            style={{ background: "#161616" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold text-white">Link playlist</span>
-              <button
-                onClick={() => { setShareUrl(""); setShareCopied(false) }}
-                className="text-gray-500 hover:text-white text-xl leading-none"
-              >×</button>
-            </div>
-            <div className="flex gap-2">
-              <input
-                readOnly
-                value={shareUrl}
-                onFocus={(e) => e.target.select()}
-                className="flex-1 text-[11px] rounded-lg px-3 py-2.5 text-gray-300 border border-white/10 min-w-0"
-                style={{ background: "rgba(255,255,255,0.04)" }}
-              />
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(shareUrl).catch(() => {})
-                  setShareCopied(true)
-                  setTimeout(() => setShareCopied(false), 2000)
-                }}
-                className="text-xs bg-white text-black font-semibold px-4 py-2.5 rounded-lg shrink-0 hover:bg-white/90 active:scale-95 transition-all min-w-[64px] text-center"
-              >
-                {shareCopied ? "✓" : "Copia"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
