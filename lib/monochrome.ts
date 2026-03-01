@@ -32,11 +32,24 @@ export function normalizeTrack(item: Record<string, unknown>): Track | null {
     (item.coverArt as string) ||
     null
 
+  // Extract release year from album releaseDate or fallback fields
+  const rawDate =
+    (albumObj?.releaseDate as string | undefined) ||
+    (albumObj?.releaseYear as string | number | undefined) ||
+    (item.streamStartDate as string | undefined) ||
+    null
+  let year: number | undefined
+  if (rawDate) {
+    const parsed = parseInt(String(rawDate).substring(0, 4))
+    if (!isNaN(parsed) && parsed > 1900 && parsed <= 2099) year = parsed
+  }
+
   return {
     id: item.id as number,
     title: (item.title as string) || "Unknown Title",
     artist,
     album: (albumObj?.title as string) || "",
+    year,
     duration: item.duration as number | undefined,
     audioQuality: item.audioQuality as string | undefined,
     coverUrl: buildCoverUrl(cover),
