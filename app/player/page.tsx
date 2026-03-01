@@ -6,6 +6,7 @@ import { useStore } from "@/lib/store"
 import { AudioPlayer, seekRef } from "@/components/AudioPlayer"
 import { TrackCard } from "@/components/TrackCard"
 import { MOODS } from "@/lib/types"
+import { encodePlaylist } from "@/lib/share"
 import type { Track, MoodConfig } from "@/lib/types"
 
 function fmt(secs: number) {
@@ -15,7 +16,7 @@ function fmt(secs: number) {
   return `${m}:${s.toString().padStart(2, "0")}`
 }
 
-// ─── Shared track row ─────────────────────────────────────────────────────────
+// ─── Shared track row (For You panel) ────────────────────────────────────────
 function TrackRow({ track, onAdd }: { track: Track; onAdd?: () => void }) {
   return (
     <div className="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition-colors group cursor-default">
@@ -39,125 +40,137 @@ function TrackRow({ track, onAdd }: { track: Track; onAdd?: () => void }) {
   )
 }
 
-// ─── Mobile full-screen player ────────────────────────────────────────────────
-function MobilePlayer({ onLike }: { onLike: () => void }) {
+// ─── Compact mobile player bar ────────────────────────────────────────────────
+// Matches the Tidal-style mini player from the screenshot
+function CompactPlayerBar({ onLike }: { onLike: () => void }) {
   const {
-    playlist, currentIndex, isPlaying, volume, repeatMode, isBuffering, playbackError,
-    setIsPlaying, nextTrack, prevTrack, cycleRepeat, isLiked, setVolume,
+    playlist, currentIndex, isPlaying, repeatMode, isBuffering,
+    setIsPlaying, nextTrack, prevTrack, cycleRepeat, isLiked,
   } = useStore()
-  const playbackTime = useStore((s) => s.playbackTime)
+  const playbackTime     = useStore((s) => s.playbackTime)
   const playbackDuration = useStore((s) => s.playbackDuration)
 
   const currentTrack = playlist[currentIndex]
   const liked = currentTrack ? isLiked(currentTrack.id) : false
-  const showSpinner = isBuffering && !playbackError
 
   if (!currentTrack) return null
 
+  const pct = playbackDuration ? (playbackTime / playbackDuration) * 100 : 0
+
   return (
-    <div className="flex flex-col h-full bg-black px-6 pt-6 pb-8 select-none">
-      {/* Album art */}
-      <div className="flex-1 flex items-center justify-center min-h-0 mb-6">
+    <div className="shrink-0 px-4 pt-3 pb-5 border-t border-white/5" style={{ background: "#090909" }}>
+      {/* Track info row */}
+      <div className="flex items-center gap-2.5 mb-3">
         {currentTrack.coverUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={currentTrack.coverUrl}
-            alt={currentTrack.title}
-            className="w-full max-w-xs aspect-square rounded-2xl object-cover ring-1 ring-white/10"
-            style={{ boxShadow: "0 32px 80px rgba(0,0,0,0.7)" }}
+            alt=""
+            className="w-7 h-7 rounded-md object-cover shrink-0 ring-1 ring-white/10"
           />
         ) : (
-          <div className="w-full max-w-xs aspect-square rounded-2xl bg-white/5 flex items-center justify-center text-8xl ring-1 ring-white/10">
-            🎵
-          </div>
+          <div className="w-7 h-7 rounded-md bg-white/5 flex items-center justify-center shrink-0 text-xs">🎵</div>
         )}
-      </div>
-
-      {/* Track info + like */}
-      <div className="flex items-start justify-between mb-5 gap-3">
-        <div className="min-w-0">
-          <div className="text-xl font-bold text-white leading-tight truncate">{currentTrack.title}</div>
-          <div className="text-gray-400 text-sm mt-0.5 truncate">{currentTrack.artist}</div>
-          {currentTrack.album && <div className="text-gray-600 text-xs mt-0.5 truncate">{currentTrack.album}</div>}
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold text-white truncate leading-tight">{currentTrack.title}</div>
+          <div className="text-[11px] text-gray-500 truncate leading-tight">{currentTrack.artist}</div>
         </div>
-        <button onClick={onLike} className={["shrink-0 text-2xl mt-0.5 transition-all active:scale-90", liked ? "text-red-500" : "text-gray-500"].join(" ")}>
+        <button
+          onClick={onLike}
+          className={["shrink-0 text-base transition-all active:scale-90", liked ? "text-red-400" : "text-gray-600"].join(" ")}
+        >
           {liked ? "♥" : "♡"}
         </button>
       </div>
 
+      {/* Controls row */}
+      <div className="flex items-center justify-center gap-7 mb-3">
+        <button onClick={prevTrack} className="text-white text-xl active:scale-90 transition-transform">⏮</button>
+        <button
+          onClick={() => setIsPlaying(!isPlaying)}
+          className="w-11 h-11 rounded-full bg-white text-black flex items-center justify-center text-base font-bold active:scale-95 transition-transform shrink-0"
+        >
+          {isBuffering
+            ? <span className="block w-4 h-4 rounded-full border-2 border-black border-t-transparent animate-spin" />
+            : isPlaying ? "⏸" : "▶"}
+        </button>
+        <button onClick={nextTrack} className="text-white text-xl active:scale-90 transition-transform">⏭</button>
+        <button
+          onClick={cycleRepeat}
+          className={["text-base transition-colors", repeatMode === "none" ? "text-gray-600" : "text-white"].join(" ")}
+        >
+          {repeatMode === "one" ? "↺1" : "↺"}
+        </button>
+      </div>
+
       {/* Progress bar */}
-      <div className="mb-4">
+      <div>
         <input
           type="range" min={0} max={playbackDuration || 0} value={playbackTime}
           onChange={(e) => seekRef.current?.(parseFloat(e.target.value))}
           className="progress-bar w-full mb-1.5"
-          style={{ background: `linear-gradient(to right, #ffffff ${playbackDuration ? (playbackTime / playbackDuration) * 100 : 0}%, #282828 0%)` }}
+          style={{ background: `linear-gradient(to right, #ffffff ${pct}%, #282828 0%)` }}
         />
         <div className="flex justify-between">
-          <span className="text-xs text-gray-500 tabular-nums">{fmt(playbackTime)}</span>
-          <span className="text-xs text-gray-500 tabular-nums">{fmt(playbackDuration)}</span>
+          <span className="text-[10px] text-gray-600 tabular-nums">{fmt(playbackTime)}</span>
+          <span className="text-[10px] text-gray-600 tabular-nums">{fmt(playbackDuration)}</span>
         </div>
-      </div>
-
-      {playbackError && <p className="text-xs text-red-400 text-center mb-3">{playbackError}</p>}
-
-      {/* Main controls */}
-      <div className="flex items-center justify-between mb-5">
-        <button onClick={cycleRepeat} className={["text-xl transition-colors", repeatMode === "none" ? "text-gray-600" : "text-white"].join(" ")}>
-          {repeatMode === "one" ? "↺1" : "↺"}
-        </button>
-        <button onClick={prevTrack} className="text-white text-3xl active:scale-90 transition-transform">⏮</button>
-        <button
-          onClick={() => setIsPlaying(!isPlaying)}
-          className="w-16 h-16 rounded-full bg-white text-black flex items-center justify-center text-2xl font-bold active:scale-95 transition-transform"
-        >
-          {showSpinner
-            ? <span className="block w-6 h-6 rounded-full border-2 border-black border-t-transparent animate-spin" />
-            : isPlaying ? "⏸" : "▶"}
-        </button>
-        <button onClick={nextTrack} className="text-white text-3xl active:scale-90 transition-transform">⏭</button>
-        <div className="w-8" />
-      </div>
-
-      {/* Volume */}
-      <div className="flex items-center gap-2">
-        <span className="text-gray-500 text-sm">🔈</span>
-        <input
-          type="range" min={0} max={1} step={0.05} value={volume}
-          onChange={(e) => setVolume(parseFloat(e.target.value))}
-          className="volume-bar flex-1"
-        />
-        <span className="text-gray-500 text-sm">🔊</span>
       </div>
     </div>
   )
 }
 
-// ─── Mini bar (shown on Queue/ForYou tabs) ────────────────────────────────────
-function MiniBar({ onGoToPlayer }: { onGoToPlayer: () => void }) {
-  const { playlist, currentIndex, isPlaying, setIsPlaying, isBuffering } = useStore()
+// ─── Now Playing album art view (mobile "playing" tab) ────────────────────────
+function NowPlayingContent({
+  onLike, onMix, mixingId,
+}: {
+  onLike: () => void
+  onMix: (track: Track) => void
+  mixingId: number | null
+}) {
+  const { playlist, currentIndex, isLiked } = useStore()
   const currentTrack = playlist[currentIndex]
   if (!currentTrack) return null
+  const liked = isLiked(currentTrack.id)
+
   return (
-    <div
-      className="shrink-0 flex items-center gap-3 px-4 py-3 border-t border-white/5"
-      style={{ background: "rgba(8,8,12,0.95)" }}
-    >
-      {currentTrack.coverUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={currentTrack.coverUrl} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0 ring-1 ring-white/10" onClick={onGoToPlayer} />
-      ) : (
-        <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center shrink-0 text-lg" onClick={onGoToPlayer}>🎵</div>
-      )}
-      <div className="min-w-0 flex-1 cursor-pointer" onClick={onGoToPlayer}>
-        <div className="text-sm font-medium text-white truncate">{currentTrack.title}</div>
-        <div className="text-xs text-gray-400 truncate">{currentTrack.artist}</div>
+    <div className="flex flex-col items-center justify-center h-full bg-black px-6 pb-4">
+      {/* Album art */}
+      <div className="w-full max-w-xs mb-5">
+        {currentTrack.coverUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={currentTrack.coverUrl}
+            alt={currentTrack.title}
+            className="w-full aspect-square rounded-2xl object-cover ring-1 ring-white/10"
+            style={{ boxShadow: "0 24px 72px rgba(0,0,0,0.7)" }}
+          />
+        ) : (
+          <div className="w-full aspect-square rounded-2xl bg-white/5 flex items-center justify-center text-8xl ring-1 ring-white/10">🎵</div>
+        )}
       </div>
+
+      {/* Track info + like */}
+      <div className="flex items-start justify-between w-full max-w-xs mb-5 gap-3">
+        <div className="min-w-0">
+          <div className="text-lg font-bold text-white leading-tight truncate">{currentTrack.title}</div>
+          <div className="text-gray-400 text-sm mt-0.5 truncate">{currentTrack.artist}</div>
+          {currentTrack.album && <div className="text-gray-600 text-xs mt-0.5 truncate">{currentTrack.album}</div>}
+        </div>
+        <button onClick={onLike} className={["shrink-0 text-2xl mt-0.5 transition-all active:scale-90", liked ? "text-red-400" : "text-gray-500"].join(" ")}>
+          {liked ? "♥" : "♡"}
+        </button>
+      </div>
+
+      {/* Mix from this track */}
       <button
-        onClick={() => setIsPlaying(!isPlaying)}
-        className="shrink-0 w-10 h-10 rounded-full bg-white text-black flex items-center justify-center font-bold active:scale-95 transition-transform"
+        onClick={() => onMix(currentTrack)}
+        disabled={mixingId !== null}
+        className="w-full max-w-xs py-2 rounded-xl border border-white/10 text-xs text-gray-400 hover:text-white hover:border-white/30 disabled:opacity-40 transition-all flex items-center justify-center gap-2"
       >
-        {isBuffering ? <span className="block w-4 h-4 rounded-full border-2 border-black border-t-transparent animate-spin" /> : isPlaying ? "⏸" : "▶"}
+        {mixingId === currentTrack.id
+          ? <><span className="block w-3 h-3 rounded-full border-2 border-gray-400 border-t-transparent animate-spin" /> Building mix…</>
+          : <>⌁ Mix from this track</>}
       </button>
     </div>
   )
@@ -178,7 +191,6 @@ function ForYouPanel({ onSelectTrack }: { onSelectTrack: (i: number) => void }) 
       params.set("liked", likedTrackIds.slice(-30).join(","))
       const seen = [...new Set([...playedTrackIds, ...playlist.map((t) => t.id)])]
       if (seen.length > 0) params.set("seen", seen.slice(-300).join(","))
-      // Pass liked artist names for Discogs fingerprinting (|| separated to avoid comma conflicts)
       const likedArtists = [...new Set(likedTracks.map((t) => t.artist))].slice(0, 10)
       if (likedArtists.length > 0) params.set("artists", likedArtists.join("||"))
       const res = await fetch(`/api/for-you?${params}`)
@@ -237,15 +249,29 @@ interface QueuePanelProps {
   isSearching: boolean; isRegenerating: boolean
   handleSearch: (e: React.FormEvent) => void; handleRegenerate: () => void
   onSelectTrack: (i: number) => void; onChangeMood: () => void
+  onMix: (track: Track) => void; mixingId: number | null
+  onShare: () => void; shareCopied: boolean
 }
 
-function QueuePanel({ playlist, currentIndex, moodConfig, searchQuery, setSearchQuery, isSearching, isRegenerating, handleSearch, handleRegenerate, onSelectTrack, onChangeMood }: QueuePanelProps) {
+function QueuePanel({
+  playlist, currentIndex, moodConfig, searchQuery, setSearchQuery,
+  isSearching, isRegenerating, handleSearch, handleRegenerate,
+  onSelectTrack, onChangeMood, onMix, mixingId, onShare, shareCopied,
+}: QueuePanelProps) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="px-4 pt-4 pb-3 border-b border-white/5 space-y-3 shrink-0">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Queue</h2>
-          <button onClick={onChangeMood} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">New search</button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onShare}
+              className="text-xs text-gray-600 hover:text-gray-300 transition-colors"
+            >
+              {shareCopied ? "✓ Copied!" : "Share ↗"}
+            </button>
+            <button onClick={onChangeMood} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">New search</button>
+          </div>
         </div>
         {moodConfig && <p className="text-xs text-gray-600">{moodConfig.emoji} {moodConfig.label} · {playlist.length} tracks</p>}
         <form onSubmit={handleSearch} className="flex gap-1.5">
@@ -264,7 +290,19 @@ function QueuePanel({ playlist, currentIndex, moodConfig, searchQuery, setSearch
       </div>
       <div className="flex-1 overflow-y-auto py-1">
         {playlist.map((track, i) => (
-          <TrackCard key={`${track.id}-${i}`} track={track} isActive={i === currentIndex} onClick={() => onSelectTrack(i)} />
+          <div key={`${track.id}-${i}`} className="relative group">
+            <TrackCard track={track} isActive={i === currentIndex} onClick={() => onSelectTrack(i)} />
+            <button
+              onClick={() => onMix(track)}
+              disabled={mixingId !== null}
+              title="Mix from this track"
+              className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-gray-500 hover:text-white px-1.5 py-1 rounded bg-black/60 backdrop-blur-sm disabled:opacity-30"
+            >
+              {mixingId === track.id
+                ? <span className="block w-2.5 h-2.5 rounded-full border border-gray-400 border-t-transparent animate-spin" />
+                : "⌁ mix"}
+            </button>
+          </div>
         ))}
       </div>
     </div>
@@ -280,26 +318,31 @@ export default function PlayerPage() {
     addLike, removeLike, isLiked, addToPlaylist,
   } = useStore()
 
-  // Memoize playlist IDs for the auto-extend effect
   const playlistIds = useMemo(() => playlist.map((t) => t.id), [playlist])
 
-  const [searchQuery, setSearchQuery] = useState("")
-  const [isSearching, setIsSearching] = useState(false)
+  const [searchQuery, setSearchQuery]       = useState("")
+  const [isSearching, setIsSearching]       = useState(false)
   const [isRegenerating, setIsRegenerating] = useState(false)
-  const [mobileTab, setMobileTab] = useState<"playing" | "queue" | "foryou">("playing")
-  const [sidebarTab, setSidebarTab] = useState<"queue" | "foryou">("queue")
+  const [mobileTab, setMobileTab]           = useState<"playing" | "queue" | "foryou">("playing")
+  const [sidebarTab, setSidebarTab]         = useState<"queue" | "foryou">("queue")
   const [recommendations, setRecommendations] = useState<Track[]>([])
-  const [isLoadingRecs, setIsLoadingRecs] = useState(false)
-  const lastRecId = useRef<number | null>(null)
+  const [isLoadingRecs, setIsLoadingRecs]   = useState(false)
+  const [mixingId, setMixingId]             = useState<number | null>(null)
+  const [sonicDesc, setSonicDesc]           = useState("")
+  const [shareCopied, setShareCopied]       = useState(false)
+
+  const lastRecId  = useRef<number | null>(null)
+  const isExtending = useRef(false)
 
   const currentTrack = playlist[currentIndex]
-  const moodConfig = MOODS.find((m) => m.id === currentMood)
+  const moodConfig   = MOODS.find((m) => m.id === currentMood)
 
   useEffect(() => {
     if (!hasCompletedOnboarding) { router.replace("/onboarding"); return }
     if (!currentMood || playlist.length === 0) router.replace("/mood")
   }, [hasCompletedOnboarding, currentMood, playlist.length, router])
 
+  // Load similar tracks for desktop sidebar
   useEffect(() => {
     if (!currentTrack || currentTrack.id === lastRecId.current) return
     lastRecId.current = currentTrack.id
@@ -313,8 +356,7 @@ export default function PlayerPage() {
       .finally(() => setIsLoadingRecs(false))
   }, [currentTrack?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-extend queue: when < 5 tracks remain ahead, silently fetch more
-  const isExtending = useRef(false)
+  // Auto-extend queue when < 5 tracks remain ahead
   useEffect(() => {
     const remaining = playlist.length - currentIndex - 1
     if (remaining >= 5) return
@@ -396,21 +438,62 @@ export default function PlayerPage() {
     if (isLiked(currentTrack.id)) { removeLike(currentTrack.id); return }
     addLike(currentTrack)
     try {
-      const params = new URLSearchParams({ id: String(currentTrack.id) })
-      const res = await fetch(`/api/recommend?${params}`)
+      const res = await fetch(`/api/recommend?id=${currentTrack.id}`)
       const recs = await res.json()
       if (Array.isArray(recs) && recs.length > 0) addToPlaylist(recs)
     } catch { /* silent */ }
   }, [currentTrack, isLiked, removeLike, addLike, addToPlaylist])
 
+  const handleMix = useCallback(async (track: Track) => {
+    if (mixingId !== null) return
+    setMixingId(track.id)
+    setSonicDesc("")
+    try {
+      const played = [...new Set([
+        ...useStore.getState().playedTrackIds,
+        ...useStore.getState().playlist.map((t) => t.id),
+      ])].slice(-150)
+      const params = new URLSearchParams({
+        title: track.title,
+        artist: track.artist,
+        id: String(track.id),
+      })
+      if (played.length > 0) params.set("seen", played.join(","))
+      const res = await fetch(`/api/mix?${params}`)
+      const data = await res.json()
+      if (Array.isArray(data.tracks) && data.tracks.length > 0) {
+        setPlaylist(data.tracks)
+        setIsPlaying(true)
+        setMobileTab("playing")
+        if (data.sonicDescription) {
+          setSonicDesc(data.sonicDescription)
+          setTimeout(() => setSonicDesc(""), 5000)
+        }
+      }
+    } catch { /* silent */ } finally { setMixingId(null) }
+  }, [mixingId, setPlaylist, setIsPlaying])
+
+  const handleShare = useCallback(() => {
+    const pl = useStore.getState().playlist
+    if (pl.length === 0) return
+    const token = encodePlaylist(pl)
+    const url   = `${window.location.origin}/share/${token}`
+    navigator.clipboard.writeText(url).then(() => {
+      setShareCopied(true)
+      setTimeout(() => setShareCopied(false), 2500)
+    }).catch(() => {})
+  }, [])
+
   const queuePanelProps: QueuePanelProps = {
     playlist, currentIndex, moodConfig, searchQuery, setSearchQuery,
     isSearching, isRegenerating, handleSearch, handleRegenerate,
     onSelectTrack: handleSelectTrack, onChangeMood: () => router.push("/mood"),
+    onMix: handleMix, mixingId, onShare: handleShare, shareCopied,
   }
 
   return (
     <div className="flex h-screen overflow-hidden bg-black">
+
       {/* ─── Desktop sidebar ─── */}
       <aside className="hidden md:flex w-72 flex-col border-r border-white/5 shrink-0 overflow-hidden">
         <div className="flex shrink-0 border-b border-white/5">
@@ -426,44 +509,46 @@ export default function PlayerPage() {
       {/* ─── Main content ─── */}
       <main className="flex-1 flex flex-col overflow-hidden">
 
-        {/* Mobile tab bar */}
-        <div className="md:hidden flex shrink-0 border-b border-white/5">
-          {(["playing", "queue", "foryou"] as const).map((tab) => (
-            <button key={tab} onClick={() => setMobileTab(tab)}
-              className={["flex-1 py-3 text-xs font-medium transition-colors", mobileTab === tab ? "text-white border-b-2 border-white/60" : "text-gray-500"].join(" ")}
-            >
-              {tab === "playing" ? "Now Playing" : tab === "queue" ? `Queue${playlist.length > 0 ? ` (${playlist.length})` : ""}` : "For You"}
-            </button>
-          ))}
+        {/* ── Mobile layout ── */}
+        <div className="md:hidden flex flex-col h-full">
+          {/* Tab bar */}
+          <div className="flex shrink-0 border-b border-white/5">
+            {(["playing", "queue", "foryou"] as const).map((tab) => (
+              <button key={tab} onClick={() => setMobileTab(tab)}
+                className={["flex-1 py-3 text-xs font-medium transition-colors", mobileTab === tab ? "text-white border-b-2 border-white/60" : "text-gray-500"].join(" ")}
+              >
+                {tab === "playing" ? "Now Playing" : tab === "queue" ? `Queue${playlist.length > 0 ? ` (${playlist.length})` : ""}` : "For You"}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          <div className="flex-1 overflow-hidden">
+            {mobileTab === "playing" && (
+              <NowPlayingContent onLike={handleLike} onMix={handleMix} mixingId={mixingId} />
+            )}
+            {mobileTab === "queue" && (
+              <QueuePanel {...queuePanelProps} />
+            )}
+            {mobileTab === "foryou" && (
+              <ForYouPanel onSelectTrack={handleSelectTrack} />
+            )}
+          </div>
+
+          {/* Persistent compact player bar — always visible */}
+          <CompactPlayerBar onLike={handleLike} />
         </div>
 
-        {/* Mobile: Now Playing — full-screen player */}
-        {mobileTab === "playing" && (
-          <div className="md:hidden flex-1 overflow-hidden">
-            <MobilePlayer onLike={handleLike} />
-          </div>
-        )}
-
-        {/* Mobile: Queue tab */}
-        {mobileTab === "queue" && (
-          <div className="md:hidden flex-1 flex flex-col overflow-hidden">
-            <div className="flex-1 overflow-hidden"><QueuePanel {...queuePanelProps} /></div>
-            <MiniBar onGoToPlayer={() => setMobileTab("playing")} />
-          </div>
-        )}
-
-        {/* Mobile: For You tab */}
-        {mobileTab === "foryou" && (
-          <div className="md:hidden flex-1 flex flex-col overflow-hidden">
-            <div className="flex-1 overflow-hidden"><ForYouPanel onSelectTrack={handleSelectTrack} /></div>
-            <MiniBar onGoToPlayer={() => setMobileTab("playing")} />
-          </div>
-        )}
-
-        {/* Desktop: Now Playing content */}
+        {/* ── Desktop Now Playing content ── */}
         <div className="hidden md:flex flex-1 overflow-y-auto pb-28">
           {currentTrack ? (
             <div className="max-w-md mx-auto px-6 pt-10 pb-4 w-full animate-fadeup">
+              {/* Sonic description toast */}
+              {sonicDesc && (
+                <div className="mb-4 text-center text-xs text-gray-500 italic animate-pulse">
+                  {sonicDesc}
+                </div>
+              )}
               <div className="flex justify-center mb-6">
                 {currentTrack.coverUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -475,11 +560,20 @@ export default function PlayerPage() {
                   <div className="w-56 h-56 sm:w-64 sm:h-64 rounded-2xl bg-white/5 flex items-center justify-center text-7xl ring-1 ring-white/10">🎵</div>
                 )}
               </div>
-              <div className="text-center mb-8">
+              <div className="text-center mb-5">
                 <h1 className="text-xl sm:text-2xl font-bold text-white mb-1 leading-tight">{currentTrack.title}</h1>
                 <p className="text-gray-300 text-sm">{currentTrack.artist}</p>
                 {currentTrack.album && <p className="text-gray-500 text-xs mt-1">{currentTrack.album}</p>}
               </div>
+              <button
+                onClick={() => handleMix(currentTrack)}
+                disabled={mixingId !== null}
+                className="w-full mb-6 py-2 rounded-xl border border-white/10 text-xs text-gray-500 hover:text-white hover:border-white/30 disabled:opacity-40 transition-all flex items-center justify-center gap-2"
+              >
+                {mixingId === currentTrack.id
+                  ? <><span className="block w-3 h-3 rounded-full border-2 border-gray-400 border-t-transparent animate-spin" />Building mix…</>
+                  : <>⌁ Mix from this track</>}
+              </button>
               {(isLoadingRecs || recommendations.length > 0) && (
                 <div>
                   <h2 className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-2 px-1">Similar tracks</h2>
