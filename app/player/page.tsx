@@ -9,6 +9,53 @@ import { MOODS } from "@/lib/types"
 import { encodePlaylist } from "@/lib/share"
 import type { Track, MoodConfig } from "@/lib/types"
 
+// ─── Search form data ────────────────────────────────────────────────────────
+const GENRES_UI = [
+  { value: "Jazz",                    label: "Jazz" },
+  { value: "Electronic",              label: "Electronic" },
+  { value: "Hip Hop",                 label: "Hip Hop" },
+  { value: "Rock",                    label: "Rock" },
+  { value: "Funk / Soul",             label: "Funk / Soul" },
+  { value: "Classical",               label: "Classical" },
+  { value: "Blues",                   label: "Blues" },
+  { value: "Folk, World, & Country",  label: "World / Folk" },
+  { value: "Pop",                     label: "Pop" },
+  { value: "Reggae",                  label: "Reggae" },
+  { value: "Latin",                   label: "Latin" },
+]
+
+const GENRE_STYLES_UI: Record<string, string[]> = {
+  "Jazz":                   ["Post Bop", "Modal", "Hard Bop", "Bebop", "Free Jazz", "Cool Jazz", "Fusion", "Bossa Nova", "Soul Jazz", "Jazz-Funk", "Latin Jazz", "Spiritual Jazz", "Avant-garde Jazz", "Soundtrack"],
+  "Electronic":             ["Downtempo", "Ambient", "House", "Techno", "IDM", "Drum n Bass", "Trip Hop", "Electro", "Minimal", "Synth-pop", "Dark Ambient", "Kosmische Musik"],
+  "Hip Hop":                ["Boom Bap", "Trap", "Abstract", "Jazz-Rap", "Conscious", "Underground", "G-Funk", "Lo-Fi"],
+  "Rock":                   ["Alternative Rock", "Indie Rock", "Psychedelic Rock", "Post-Rock", "Shoegaze", "Garage Rock", "Krautrock", "Hard Rock", "Progressive Rock", "Punk"],
+  "Funk / Soul":            ["Funk", "Soul", "Neo Soul", "R&B", "Rare Groove", "Deep Funk", "Jazz-Funk", "Quiet Storm"],
+  "Classical":              ["Baroque", "Romantic", "Contemporary", "Minimalism", "Neo-Classical", "Soundtrack", "Impressionist", "Chamber Music"],
+  "Blues":                  ["Delta Blues", "Electric Blues", "Chicago Blues", "Country Blues", "Soul Blues"],
+  "Folk, World, & Country": ["Folk", "Americana", "Celtic", "Bluegrass", "World Fusion", "African", "Country"],
+  "Pop":                    ["Synth-pop", "Dream Pop", "Baroque Pop", "Art Pop", "Chamber Pop", "Indie Pop", "Sophisti-Pop"],
+  "Reggae":                 ["Roots Reggae", "Dub", "Dancehall", "Ska", "Rocksteady"],
+  "Latin":                  ["Bossa Nova", "Salsa", "Latin Jazz", "Cumbia", "Tango", "Bolero"],
+}
+
+const DECADE_OPTIONS = [
+  { label: "Any decade", from: "", to: "" },
+  { label: "1950s", from: "1950", to: "1959" },
+  { label: "1960s", from: "1960", to: "1969" },
+  { label: "1970s", from: "1970", to: "1979" },
+  { label: "1980s", from: "1980", to: "1989" },
+  { label: "1990s", from: "1990", to: "1999" },
+  { label: "2000s", from: "2000", to: "2009" },
+  { label: "2010s", from: "2010", to: "2019" },
+  { label: "2020s", from: "2020", to: "2025" },
+]
+
+const COUNTRIES_UI = [
+  "Italy", "United States", "United Kingdom", "Germany", "France",
+  "Japan", "Brazil", "Jamaica", "Sweden", "Nigeria", "Argentina",
+  "Cuba", "Spain", "Portugal", "South Africa", "South Korea",
+]
+
 function fmt(secs: number) {
   if (!isFinite(secs) || secs < 0) return "0:00"
   const m = Math.floor(secs / 60)
@@ -185,6 +232,149 @@ function NowPlayingContent({
   )
 }
 
+// ─── Structured search form ───────────────────────────────────────────────────
+function SearchForm({ onSearch, isSearching }: { onSearch: (q: string) => void; isSearching: boolean }) {
+  const [genre,   setGenre]   = useState("")
+  const [style,   setStyle]   = useState("")
+  const [decade,  setDecade]  = useState(0)   // index into DECADE_OPTIONS
+  const [country, setCountry] = useState("")
+  const [mood,    setMood]    = useState("")
+
+  const availableStyles = genre ? (GENRE_STYLES_UI[genre] ?? []) : []
+
+  function toggleGenre(g: string) {
+    const next = genre === g ? "" : g
+    setGenre(next)
+    setStyle("")   // reset style on genre change
+  }
+
+  function buildQuery() {
+    const parts: string[] = []
+    if (style)  parts.push(style)
+    if (genre)  parts.push(genre)
+    if (country) parts.push(country)
+    const dec = DECADE_OPTIONS[decade]
+    if (dec.from) parts.push(`${dec.from}-${dec.to}`)
+    if (mood)   parts.push(mood)
+    return parts.join(" ").trim()
+  }
+
+  const canSearch = !!(genre || style || mood)
+
+  function reset() {
+    setGenre(""); setStyle(""); setDecade(0); setCountry(""); setMood("")
+  }
+
+  const chip = (active: boolean, subtle?: boolean) =>
+    [
+      "px-2 py-1 rounded-md text-[10px] font-medium border transition-all",
+      active
+        ? subtle
+          ? "bg-white/15 text-white border-white/40"
+          : "bg-white text-black border-white"
+        : "text-gray-500 border-white/10 hover:border-white/25 hover:text-gray-300",
+    ].join(" ")
+
+  const selectCls =
+    "w-full bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-white/30 transition-colors"
+
+  return (
+    <div className="space-y-3">
+
+      {/* Genre */}
+      <div>
+        <p className="text-[10px] text-gray-600 uppercase tracking-widest font-medium mb-1.5">Genre</p>
+        <div className="flex flex-wrap gap-1">
+          {GENRES_UI.map((g) => (
+            <button key={g.value} onClick={() => toggleGenre(g.value)} className={chip(genre === g.value)}>
+              {g.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Style — shown only after genre selected */}
+      {availableStyles.length > 0 && (
+        <div>
+          <p className="text-[10px] text-gray-600 uppercase tracking-widest font-medium mb-1.5">Style</p>
+          <div className="flex flex-wrap gap-1">
+            {availableStyles.map((s) => (
+              <button key={s} onClick={() => setStyle(style === s ? "" : s)} className={chip(style === s, true)}>
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Decade + Country */}
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <p className="text-[10px] text-gray-600 uppercase tracking-widest font-medium mb-1.5">Decade</p>
+          <select
+            value={decade}
+            onChange={(e) => setDecade(Number(e.target.value))}
+            className={selectCls}
+          >
+            {DECADE_OPTIONS.map((d, i) => (
+              <option key={i} value={i}>{d.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <p className="text-[10px] text-gray-600 uppercase tracking-widest font-medium mb-1.5">Country</p>
+          <select value={country} onChange={(e) => setCountry(e.target.value)} className={selectCls}>
+            <option value="">Any</option>
+            {COUNTRIES_UI.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Mood */}
+      <div>
+        <p className="text-[10px] text-gray-600 uppercase tracking-widest font-medium mb-1.5">Mood</p>
+        <div className="flex gap-1">
+          {MOODS.map((m) => (
+            <button
+              key={m.id}
+              onClick={() => setMood(mood === m.id ? "" : m.id)}
+              title={m.label}
+              className={[
+                "flex-1 py-1.5 rounded-md border transition-all flex flex-col items-center gap-px",
+                mood === m.id
+                  ? "bg-white/15 border-white/40 text-white"
+                  : "border-white/8 text-gray-600 hover:border-white/20 hover:text-gray-400",
+              ].join(" ")}
+            >
+              <span className="text-sm leading-none">{m.emoji}</span>
+              <span className="text-[8px] leading-none">{m.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-1.5">
+        <button
+          onClick={() => { const q = buildQuery(); if (q) onSearch(q) }}
+          disabled={isSearching || !canSearch}
+          className="flex-1 py-2 rounded-lg bg-white text-black text-xs font-semibold disabled:opacity-30 hover:bg-white/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+        >
+          {isSearching
+            ? <span className="block w-3.5 h-3.5 rounded-full border-2 border-black border-t-transparent animate-spin" />
+            : "▶ Generate playlist"}
+        </button>
+        {canSearch && (
+          <button
+            onClick={reset}
+            className="px-2.5 py-2 rounded-lg border border-white/10 text-xs text-gray-500 hover:text-gray-300 hover:border-white/20 transition-all"
+          >✕</button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── For You panel ────────────────────────────────────────────────────────────
 function ForYouPanel({ onSelectTrack }: { onSelectTrack: (i: number) => void }) {
   const [tracks, setTracks] = useState<Track[]>([])
@@ -254,49 +444,48 @@ function ForYouPanel({ onSelectTrack }: { onSelectTrack: (i: number) => void }) 
 // ─── Queue panel ──────────────────────────────────────────────────────────────
 interface QueuePanelProps {
   playlist: Track[]; currentIndex: number; moodConfig: MoodConfig | undefined
-  searchQuery: string; setSearchQuery: (v: string) => void
   isSearching: boolean; isRegenerating: boolean
-  handleSearch: (e: React.FormEvent) => void; handleRegenerate: () => void
-  onSelectTrack: (i: number) => void; onChangeMood: () => void
+  onSearch: (q: string) => void; handleRegenerate: () => void
+  onSelectTrack: (i: number) => void
   onMix: (track: Track) => void; mixingId: number | null
   onShare: () => void; shareCopied: boolean
 }
 
 function QueuePanel({
-  playlist, currentIndex, moodConfig, searchQuery, setSearchQuery,
-  isSearching, isRegenerating, handleSearch, handleRegenerate,
-  onSelectTrack, onChangeMood, onMix, mixingId, onShare, shareCopied,
+  playlist, currentIndex, moodConfig,
+  isSearching, isRegenerating, onSearch, handleRegenerate,
+  onSelectTrack, onMix, mixingId, onShare, shareCopied,
 }: QueuePanelProps) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="px-4 pt-4 pb-3 border-b border-white/5 space-y-3 shrink-0">
-        <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="px-4 pt-4 pb-3 border-b border-white/5 shrink-0">
+        <div className="flex items-center justify-between mb-1">
           <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Queue</h2>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onShare}
-              className="text-xs text-gray-600 hover:text-gray-300 transition-colors"
-            >
-              {shareCopied ? "✓ Copied!" : "Share ↗"}
-            </button>
-            <button onClick={onChangeMood} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">New search</button>
-          </div>
-        </div>
-        {moodConfig && <p className="text-xs text-gray-600">{moodConfig.emoji} {moodConfig.label} · {playlist.length} tracks</p>}
-        <form onSubmit={handleSearch} className="flex gap-1.5">
-          <input
-            type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search… (e.g. 70s Italian jazz)"
-            className="flex-1 min-w-0 text-xs bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-gray-600 focus:outline-none focus:border-white/40 transition-colors"
-          />
-          <button type="submit" disabled={isSearching || !searchQuery.trim()} className="shrink-0 px-2.5 py-2 rounded-lg bg-white/10 hover:bg-white/20 disabled:opacity-30 text-white text-xs font-medium transition-colors border border-white/10">
-            {isSearching ? <span className="block w-3.5 h-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" /> : "↵"}
+          <button onClick={onShare} className="text-xs text-gray-600 hover:text-gray-300 transition-colors">
+            {shareCopied ? "✓ Copied!" : "Share ↗"}
           </button>
-        </form>
-        <button onClick={handleRegenerate} disabled={isRegenerating} className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg border border-white/8 text-xs text-gray-500 hover:text-gray-300 hover:border-white/20 disabled:opacity-40 transition-all">
-          {isRegenerating ? <><span className="block w-3 h-3 rounded-full border-2 border-gray-400 border-t-transparent animate-spin" />Generating…</> : <>⟳ New playlist</>}
+        </div>
+        {moodConfig && (
+          <p className="text-xs text-gray-600 mb-3">{moodConfig.emoji} {moodConfig.label} · {playlist.length} tracks</p>
+        )}
+
+        {/* Structured search form */}
+        <SearchForm onSearch={onSearch} isSearching={isSearching} />
+
+        {/* New playlist (same query, fresh tracks) */}
+        <button
+          onClick={handleRegenerate}
+          disabled={isRegenerating}
+          className="w-full mt-2 flex items-center justify-center gap-2 py-1.5 rounded-lg border border-white/8 text-xs text-gray-500 hover:text-gray-300 hover:border-white/20 disabled:opacity-40 transition-all"
+        >
+          {isRegenerating
+            ? <><span className="block w-3 h-3 rounded-full border-2 border-gray-400 border-t-transparent animate-spin" />Generating…</>
+            : <>⟳ New playlist</>}
         </button>
       </div>
+
+      {/* Track list */}
       <div className="flex-1 overflow-y-auto py-1">
         {playlist.map((track, i) => (
           <div key={`${track.id}-${i}`} className="relative group">
@@ -329,7 +518,6 @@ export default function PlayerPage() {
 
   const playlistIds = useMemo(() => playlist.map((t) => t.id), [playlist])
 
-  const [searchQuery, setSearchQuery]       = useState("")
   const [isSearching, setIsSearching]       = useState(false)
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [mobileTab, setMobileTab]           = useState<"playing" | "queue" | "foryou">("playing")
@@ -396,10 +584,8 @@ export default function PlayerPage() {
       .finally(() => { isExtending.current = false })
   }, [currentIndex, playlist.length, playlistIds, addToPlaylist]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSearch = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault()
-    const q = searchQuery.trim()
-    if (!q) return
+  const handleSearch = useCallback(async (q: string) => {
+    if (!q.trim()) return
     setIsSearching(true)
     try {
       const played = useStore.getState().playedTrackIds.slice(-150)
@@ -413,7 +599,7 @@ export default function PlayerPage() {
         setLastSearchQuery(q); setPlaylist(tracks); setCurrentMood("chill"); setIsPlaying(true); setMobileTab("playing")
       }
     } catch { /* silent */ } finally { setIsSearching(false) }
-  }, [searchQuery, setPlaylist, setCurrentMood, setIsPlaying, setLastSearchQuery])
+  }, [setPlaylist, setCurrentMood, setIsPlaying, setLastSearchQuery])
 
   const handleRegenerate = useCallback(async () => {
     setIsRegenerating(true)
@@ -494,9 +680,9 @@ export default function PlayerPage() {
   }, [])
 
   const queuePanelProps: QueuePanelProps = {
-    playlist, currentIndex, moodConfig, searchQuery, setSearchQuery,
-    isSearching, isRegenerating, handleSearch, handleRegenerate,
-    onSelectTrack: handleSelectTrack, onChangeMood: () => router.push("/mood"),
+    playlist, currentIndex, moodConfig,
+    isSearching, isRegenerating, onSearch: handleSearch, handleRegenerate,
+    onSelectTrack: handleSelectTrack,
     onMix: handleMix, mixingId, onShare: handleShare, shareCopied,
   }
 
