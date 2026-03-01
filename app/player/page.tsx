@@ -481,7 +481,7 @@ export default function PlayerPage() {
         {/* Now Playing content */}
         <div
           className={[
-            "flex-1 overflow-y-auto pb-28",
+            "flex-1 overflow-y-auto pb-44 md:pb-28",
             mobileTab === "queue" || mobileTab === "foryou" ? "hidden md:block" : "",
           ].join(" ")}
         >

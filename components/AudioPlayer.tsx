@@ -79,6 +79,9 @@ export function AudioPlayer() {
         const audio = audioRef.current
         if (audio) { audio.currentTime = 0; audio.play().catch(() => {}) }
       } else {
+        // Set loadingRef BEFORE nextTrack() so the browser's post-ended pause
+        // event doesn't flip isPlaying to false and break auto-advance
+        loadingRef.current = true
         nextTrack()
       }
     }
@@ -216,84 +219,88 @@ export function AudioPlayer() {
 
       {currentTrack ? (
         <>
-          {/* ── Mobile layout ── */}
-          <div className="md:hidden px-3 py-2">
-            {/* Progress bar */}
-            <input
-              type="range"
-              min={0}
-              max={duration || 0}
-              value={currentTime}
-              onChange={seek}
-              className="progress-bar w-full mb-2"
-              style={{
-                background: `linear-gradient(to right, #ffffff ${duration ? (currentTime / duration) * 100 : 0}%, #282828 0%)`,
-              }}
-            />
+          {/* ── Mobile layout (same quality as desktop) ── */}
+          <div className="md:hidden px-4 pt-3 pb-2 space-y-2">
+            {/* Row 1: cover + track info + like */}
             <div className="flex items-center gap-3">
-              {/* Cover */}
               {currentTrack.coverUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={currentTrack.coverUrl}
                   alt=""
-                  className="w-10 h-10 rounded-lg object-cover shrink-0 ring-1 ring-white/10"
+                  className="w-11 h-11 rounded-lg object-cover shrink-0 ring-1 ring-white/10"
                 />
               ) : (
-                <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center text-lg shrink-0">
+                <div className="w-11 h-11 rounded-lg bg-white/5 flex items-center justify-center text-xl shrink-0">
                   🎵
                 </div>
               )}
-              {/* Title */}
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium text-white truncate">{currentTrack.title}</div>
+                <div className="text-sm font-semibold text-white truncate">{currentTrack.title}</div>
                 <div className="text-xs text-gray-400 truncate">{currentTrack.artist}</div>
               </div>
-              {/* Controls */}
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={handleLike}
-                  className={[
-                    "text-lg transition-all active:scale-90",
-                    liked ? "text-red-500" : "text-gray-500 hover:text-white",
-                  ].join(" ")}
-                >
-                  {liked ? "♥" : "♡"}
-                </button>
-                <button
-                  onClick={prevTrack}
-                  className="text-gray-400 hover:text-white transition-colors text-lg"
-                >
-                  ⏮
-                </button>
-                <button
-                  onClick={() => setIsPlaying(!isPlaying)}
-                  className="w-9 h-9 rounded-full bg-white text-black flex items-center justify-center font-bold hover:scale-105 active:scale-95 transition-transform"
-                >
-                  {showSpinner ? (
-                    <span className="block w-4 h-4 rounded-full border-2 border-black border-t-transparent animate-spin" />
-                  ) : isPlaying ? "⏸" : "▶"}
-                </button>
-                <button
-                  onClick={nextTrack}
-                  className="text-gray-400 hover:text-white transition-colors text-lg"
-                >
-                  ⏭
-                </button>
-                <button
-                  onClick={cycleRepeat}
-                  title={repeatMode === "none" ? "Repeat off" : repeatMode === "all" ? "Repeat all" : "Repeat one"}
-                  className={[
-                    "text-sm transition-colors",
-                    repeatMode === "none" ? "text-gray-600" : "text-white",
-                  ].join(" ")}
-                >
-                  {repeatMode === "one" ? "↺1" : "↺"}
-                </button>
+              <button
+                onClick={handleLike}
+                className={[
+                  "shrink-0 text-xl transition-all active:scale-90",
+                  liked ? "text-red-500" : "text-gray-500",
+                ].join(" ")}
+              >
+                {liked ? "♥" : "♡"}
+              </button>
+            </div>
+
+            {/* Row 2: progress bar */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 w-8 text-right tabular-nums">{fmt(currentTime)}</span>
+              <input
+                type="range"
+                min={0}
+                max={duration || 0}
+                value={currentTime}
+                onChange={seek}
+                className="progress-bar flex-1"
+                style={{
+                  background: `linear-gradient(to right, #ffffff ${duration ? (currentTime / duration) * 100 : 0}%, #282828 0%)`,
+                }}
+              />
+              <span className="text-xs text-gray-500 w-8 tabular-nums">{fmt(duration)}</span>
+            </div>
+
+            {/* Row 3: controls + volume */}
+            <div className="flex items-center justify-between px-1">
+              <button
+                onClick={cycleRepeat}
+                className={["text-lg transition-colors", repeatMode === "none" ? "text-gray-600" : "text-white"].join(" ")}
+              >
+                {repeatMode === "one" ? "↺1" : "↺"}
+              </button>
+              <button onClick={prevTrack} className="text-gray-400 text-2xl active:scale-90 transition-transform">⏮</button>
+              <button
+                onClick={() => setIsPlaying(!isPlaying)}
+                className="w-12 h-12 rounded-full bg-white text-black flex items-center justify-center font-bold text-lg active:scale-95 transition-transform"
+              >
+                {showSpinner ? (
+                  <span className="block w-5 h-5 rounded-full border-2 border-black border-t-transparent animate-spin" />
+                ) : isPlaying ? "⏸" : "▶"}
+              </button>
+              <button onClick={nextTrack} className="text-gray-400 text-2xl active:scale-90 transition-transform">⏭</button>
+              <div className="flex items-center gap-1">
+                <span className="text-gray-500 text-xs">🔈</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={volume}
+                  onChange={(e) => useStore.getState().setVolume(parseFloat(e.target.value))}
+                  className="volume-bar w-16"
+                />
               </div>
             </div>
+
             {streamError && (
-              <p className="text-xs text-red-400 text-center mt-1">{streamError}</p>
+              <p className="text-xs text-red-400 text-center">{streamError}</p>
             )}
           </div>
 
