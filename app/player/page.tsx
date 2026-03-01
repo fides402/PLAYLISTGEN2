@@ -87,11 +87,20 @@ function CompactPlayerBar({ onLike }: { onLike: () => void }) {
         <button onClick={prevTrack} className="text-white text-xl active:scale-90 transition-transform">⏮</button>
         <button
           onClick={() => setIsPlaying(!isPlaying)}
-          className="w-11 h-11 rounded-full bg-white text-black flex items-center justify-center text-base font-bold active:scale-95 transition-transform shrink-0"
+          className="w-11 h-11 rounded-full bg-white text-black flex items-center justify-center active:scale-95 transition-transform shrink-0"
         >
-          {isBuffering
-            ? <span className="block w-4 h-4 rounded-full border-2 border-black border-t-transparent animate-spin" />
-            : isPlaying ? "⏸" : "▶"}
+          {isBuffering ? (
+            <span className="block w-4 h-4 rounded-full border-2 border-black border-t-transparent animate-spin" />
+          ) : isPlaying ? (
+            <svg viewBox="0 0 24 24" fill="currentColor" className="w-[18px] h-[18px]">
+              <rect x="5" y="4" width="4" height="16" rx="1.2"/>
+              <rect x="15" y="4" width="4" height="16" rx="1.2"/>
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" fill="currentColor" className="w-[18px] h-[18px]" style={{ marginLeft: "2px" }}>
+              <path d="M8 5v14l11-7z"/>
+            </svg>
+          )}
         </button>
         <button onClick={nextTrack} className="text-white text-xl active:scale-90 transition-transform">⏭</button>
         <button
@@ -249,13 +258,13 @@ interface QueuePanelProps {
   handleSearch: (e: React.FormEvent) => void; handleRegenerate: () => void
   onSelectTrack: (i: number) => void; onChangeMood: () => void
   onMix: (track: Track) => void; mixingId: number | null
-  onShare: () => void; shareCopied: boolean
+  onShare: () => void
 }
 
 function QueuePanel({
   playlist, currentIndex, moodConfig, searchQuery, setSearchQuery,
   isSearching, isRegenerating, handleSearch, handleRegenerate,
-  onSelectTrack, onChangeMood, onMix, mixingId, onShare, shareCopied,
+  onSelectTrack, onChangeMood, onMix, mixingId, onShare,
 }: QueuePanelProps) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -267,7 +276,7 @@ function QueuePanel({
               onClick={onShare}
               className="text-xs text-gray-600 hover:text-gray-300 transition-colors"
             >
-              {shareCopied ? "✓ Copied!" : "Share ↗"}
+              Share ↗
             </button>
             <button onClick={onChangeMood} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">New search</button>
           </div>
@@ -328,7 +337,8 @@ export default function PlayerPage() {
   const [isLoadingRecs, setIsLoadingRecs]   = useState(false)
   const [mixingId, setMixingId]             = useState<number | null>(null)
   const [sonicDesc, setSonicDesc]           = useState("")
-  const [shareCopied, setShareCopied]       = useState(false)
+  const [shareUrl, setShareUrl]             = useState("")   // URL to show in share overlay
+  const [shareCopied, setShareCopied]       = useState(false) // "Copia" feedback in overlay
 
   const lastRecId  = useRef<number | null>(null)
   const isExtending = useRef(false)
@@ -483,10 +493,9 @@ export default function PlayerPage() {
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const { id } = await res.json() as { id: string }
-      const url = `${window.location.origin}/share/${id}`
-      await navigator.clipboard.writeText(url)
-      setShareCopied(true)
-      setTimeout(() => setShareCopied(false), 2500)
+      // Show share overlay — clipboard is written from a synchronous button
+      // click inside the overlay to avoid losing user-activation context on iOS
+      setShareUrl(`${window.location.origin}/share/${id}`)
     } catch (err) {
       console.error("[share]", err)
     }
@@ -496,7 +505,7 @@ export default function PlayerPage() {
     playlist, currentIndex, moodConfig, searchQuery, setSearchQuery,
     isSearching, isRegenerating, handleSearch, handleRegenerate,
     onSelectTrack: handleSelectTrack, onChangeMood: () => router.push("/mood"),
-    onMix: handleMix, mixingId, onShare: handleShare, shareCopied,
+    onMix: handleMix, mixingId, onShare: handleShare,
   }
 
   return (
@@ -611,6 +620,49 @@ export default function PlayerPage() {
 
       {/* Desktop-only player bar */}
       <AudioPlayer />
+
+      {/* ─── Share overlay ─────────────────────────────────────────────────── */}
+      {/* Shown after generating the share link — clipboard is written from a  */}
+      {/* synchronous click so iOS Safari doesn't block the write.             */}
+      {shareUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center px-4 pb-8 bg-black/60 backdrop-blur-sm"
+          onClick={() => { setShareUrl(""); setShareCopied(false) }}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl p-4 border border-white/10"
+            style={{ background: "#161616" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-semibold text-white">Link playlist</span>
+              <button
+                onClick={() => { setShareUrl(""); setShareCopied(false) }}
+                className="text-gray-500 hover:text-white text-xl leading-none"
+              >×</button>
+            </div>
+            <div className="flex gap-2">
+              <input
+                readOnly
+                value={shareUrl}
+                onFocus={(e) => e.target.select()}
+                className="flex-1 text-[11px] rounded-lg px-3 py-2.5 text-gray-300 border border-white/10 min-w-0"
+                style={{ background: "rgba(255,255,255,0.04)" }}
+              />
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(shareUrl).catch(() => {})
+                  setShareCopied(true)
+                  setTimeout(() => setShareCopied(false), 2000)
+                }}
+                className="text-xs bg-white text-black font-semibold px-4 py-2.5 rounded-lg shrink-0 hover:bg-white/90 active:scale-95 transition-all min-w-[64px] text-center"
+              >
+                {shareCopied ? "✓" : "Copia"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
