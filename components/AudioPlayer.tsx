@@ -116,15 +116,15 @@ export function AudioPlayer() {
     const onError = () => {
       setIsBuffering(false)
       setIsPlaying(false)
-      setPlaybackError("Traccia non disponibile — passo al successivo…")
-      // Auto-advance to next track after 1.5 s
+      setPlaybackError("Traccia non disponibile — salto al successivo…")
+      // Auto-advance after 2 s — gives time to see the message
       setTimeout(() => {
         const state = useStore.getState()
         if (state.playbackError) {
           state.setPlaybackError(null)
           state.nextTrack()
         }
-      }, 1500)
+      }, 2000)
     }
 
     audio.addEventListener("timeupdate", onTimeUpdate)
