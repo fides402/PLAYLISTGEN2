@@ -1,8 +1,19 @@
 "use client"
-
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 import type { Track, Mood } from "./types"
+import {
+  addFeedback,
+  removeFeedback,
+  deriveUserProfile,
+  serializeProfile,
+  deserializeProfile,
+  makeFeedbackEntry,
+  createEmptyStore,
+  type UserProfileStore,
+  type SerializedUserProfile,
+  type FeedbackEntry,
+} from "./userProfile"
 
 interface User {
   id: string
@@ -23,38 +34,49 @@ interface Store {
   setExcludedGenres: (genres: string[]) => void
   toggleGenre: (genre: string) => void
 
-  // Liked tracks
+  // Liked tracks (legacy — manteniamo per retrocompatibilità)
   likedTrackIds: number[]
   likedTracks: Track[]
-  addLike: (track: Track) => void
+  addLike: (track: Track, rarityScore?: number) => void
   removeLike: (id: number) => void
   isLiked: (id: number) => boolean
+
+  // Disliked tracks
+  dislikedTrackIds: number[]
+  addDislike: (track: Track, rarityScore?: number) => void
+  removeDislike: (id: number) => void
+  isDisliked: (id: number) => boolean
+
+  // ─── F4: Feedback & UserProfile ──────────────────────────────────────
+  feedbackStore: UserProfileStore
+  /** Profilo serializzato (senza Map, persiste in localStorage) */
+  serializedProfile: SerializedUserProfile | null
+  /** Aggiunge like/dislike al feedback store e ricalcola il profilo */
+  recordFeedback: (track: Track, liked: boolean, rarityScore?: number) => void
+  /** Rimuove il feedback per una traccia */
+  clearFeedback: (trackId: number) => void
+  /** Resetta l'intero profilo utente */
+  resetProfile: () => void
 
   // Player
   currentMood: Mood | null
   setCurrentMood: (mood: Mood) => void
-
   playlist: Track[]
   setPlaylist: (tracks: Track[]) => void
   addToPlaylist: (tracks: Track[]) => void
 
   // Tracks the user has already heard — used to avoid repeats
   playedTrackIds: number[]
-
   currentIndex: number
   setCurrentIndex: (i: number) => void
   nextTrack: () => void
   prevTrack: () => void
-
   isPlaying: boolean
   setIsPlaying: (v: boolean) => void
-
   volume: number
   setVolume: (v: number) => void
-
   streamQuality: string
   setStreamQuality: (q: string) => void
-
   repeatMode: "none" | "one" | "all"
   setRepeatMode: (m: "none" | "one" | "all") => void
   cycleRepeat: () => void
@@ -96,7 +118,7 @@ export const useStore = create<Store>()(
 
       likedTrackIds: [],
       likedTracks: [],
-      addLike: (track) => {
+      addLike: (track, rarityScore) => {
         const { likedTrackIds, likedTracks } = get()
         if (!likedTrackIds.includes(track.id)) {
           set({
@@ -104,18 +126,74 @@ export const useStore = create<Store>()(
             likedTracks: [...likedTracks, track],
           })
         }
+        // Registra nel feedback store
+        get().recordFeedback(track, true, rarityScore)
       },
       removeLike: (id) => {
         set({
           likedTrackIds: get().likedTrackIds.filter((x) => x !== id),
           likedTracks: get().likedTracks.filter((t) => t.id !== id),
         })
+        get().clearFeedback(id)
       },
       isLiked: (id) => get().likedTrackIds.includes(id),
 
+      dislikedTrackIds: [],
+      addDislike: (track, rarityScore) => {
+        const { dislikedTrackIds } = get()
+        if (!dislikedTrackIds.includes(track.id)) {
+          set({ dislikedTrackIds: [...dislikedTrackIds, track.id] })
+        }
+        // Registra nel feedback store
+        get().recordFeedback(track, false, rarityScore)
+      },
+      removeDislike: (id) => {
+        set({ dislikedTrackIds: get().dislikedTrackIds.filter((x) => x !== id) })
+        get().clearFeedback(id)
+      },
+      isDisliked: (id) => get().dislikedTrackIds.includes(id),
+
+      // ─── F4: Feedback & UserProfile ────────────────────────────────────
+      feedbackStore: createEmptyStore(),
+      serializedProfile: null,
+
+      recordFeedback: (track, liked, rarityScore) => {
+        const userId = get().user?.id || "anonymous"
+        const entry = makeFeedbackEntry(
+          { ...track, popularity: undefined, bpm: undefined },
+          liked,
+          rarityScore
+        )
+        const updatedStore = addFeedback(get().feedbackStore, entry)
+        const profile = deriveUserProfile(userId, updatedStore)
+        set({
+          feedbackStore: updatedStore,
+          serializedProfile: serializeProfile(profile),
+        })
+      },
+
+      clearFeedback: (trackId) => {
+        const userId = get().user?.id || "anonymous"
+        const updatedStore = removeFeedback(get().feedbackStore, trackId)
+        const profile = deriveUserProfile(userId, updatedStore)
+        set({
+          feedbackStore: updatedStore,
+          serializedProfile: serializeProfile(profile),
+        })
+      },
+
+      resetProfile: () => {
+        set({
+          feedbackStore: createEmptyStore(),
+          serializedProfile: null,
+          likedTrackIds: [],
+          likedTracks: [],
+          dislikedTrackIds: [],
+        })
+      },
+
       currentMood: null,
       setCurrentMood: (mood) => set({ currentMood: mood }),
-
       playlist: [],
       setPlaylist: (tracks) => {
         // Track IDs as "already heard" so future playlists skip them
@@ -132,9 +210,7 @@ export const useStore = create<Store>()(
         const fresh = tracks.filter((t) => !existing.has(t.id))
         set({ playlist: [...current, ...fresh] })
       },
-
       playedTrackIds: [],
-
       currentIndex: 0,
       setCurrentIndex: (i) => set({ currentIndex: i }),
       nextTrack: () => {
@@ -149,16 +225,12 @@ export const useStore = create<Store>()(
         const { currentIndex } = get()
         if (currentIndex > 0) set({ currentIndex: currentIndex - 1 })
       },
-
       isPlaying: false,
       setIsPlaying: (v) => set({ isPlaying: v }),
-
       volume: 0.8,
       setVolume: (v) => set({ volume: v }),
-
       streamQuality: "HIGH",
       setStreamQuality: (q) => set({ streamQuality: q }),
-
       repeatMode: "none",
       setRepeatMode: (m) => set({ repeatMode: m }),
       cycleRepeat: () => {
@@ -186,6 +258,7 @@ export const useStore = create<Store>()(
         excludedGenres: s.excludedGenres,
         likedTrackIds: s.likedTrackIds,
         likedTracks: s.likedTracks,
+        dislikedTrackIds: s.dislikedTrackIds,
         hasCompletedOnboarding: s.hasCompletedOnboarding,
         currentMood: s.currentMood,
         volume: s.volume,
@@ -193,6 +266,9 @@ export const useStore = create<Store>()(
         playedTrackIds: s.playedTrackIds,
         repeatMode: s.repeatMode,
         lastSearchQuery: s.lastSearchQuery,
+        // F4: Persisti il feedback store e il profilo serializzato
+        feedbackStore: s.feedbackStore,
+        serializedProfile: s.serializedProfile,
       }),
     }
   )
