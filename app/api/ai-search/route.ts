@@ -9,6 +9,9 @@ import { findRelatedArtists } from "@/lib/musicbrainz"
 import { ALL_GENRES } from "@/lib/types"
 import type { Track, Mood } from "@/lib/types"
 
+import { planFromPrompt } from "@/lib/planner"
+import { rankTracks, type TrackWithMeta } from "@/lib/ranker"
+import { deserializeProfile, type SerializedUserProfile } from "@/lib/userProfile"
 const GROQ_KEY = process.env.GROQ_API_KEY
 
 // Discogs genre taxonomy values
@@ -319,6 +322,34 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ─── Planner fallback: se Groq non disponibile usa planFromPrompt() ──────
+  // Il planner mock converte il prompt in searchQueries + seedTracks + constraints
+  // e alimenta la pipeline esistente con artisti/brani di seed.
+  if (!GROQ_KEY) {
+    try {
+      const plan = await planFromPrompt(q)
+      // Inietta le seed track come "deep cuts" per la pipeline
+      const planArtists = plan.seedTracks.map((s) => s.artist).filter(Boolean)
+      groqDeepCuts = [...new Set([...groqDeepCuts, ...planArtists])].slice(0, 10)
+      // Inietta le search queries come artisti aggiuntivi
+      groqArtists = [...new Set([...groqArtists, ...plan.searchQueries.slice(0, 3)])].slice(0, 8)
+      // Applica i vincoli del planner se non già settati da Groq
+      if (!discogsParams.year_start && plan.constraints.yearMin) {
+        discogsParams.year_start = String(plan.constraints.yearMin)
+      }
+      if (!discogsParams.year_end && plan.constraints.yearMax) {
+        discogsParams.year_end = String(plan.constraints.yearMax)
+      }
+      if (!mood && plan.constraints.mood) mood = plan.constraints.mood
+      if (fallbackGenres.length === 0 && plan.constraints.keywords) {
+        fallbackGenres = plan.constraints.keywords.slice(0, 3)
+      }
+    } catch {
+      // silently ignore planner errors
+    }
+  }
+
+
   const yearStart = discogsParams.year_start ? parseInt(discogsParams.year_start) : null
   const yearEnd   = discogsParams.year_end   ? parseInt(discogsParams.year_end)   : null
 
@@ -514,5 +545,30 @@ export async function GET(req: NextRequest) {
     if (yearFiltered.length >= 8) finalTracks = yearFiltered
   }
 
-  return NextResponse.json(shuffle(finalTracks).slice(0, 30))
+  
+  // ─── Rerank con rarityScore + personalizzazione (F2) ──────────────────────
+  // Recupera il profilo utente dalla richiesta se passato
+  let userProfileForRank = undefined
+  const profileParam = req.nextUrl.searchParams.get("profile")
+  if (profileParam) {
+    try {
+      const decoded = JSON.parse(Buffer.from(profileParam, "base64").toString("utf-8")) as SerializedUserProfile
+      userProfileForRank = deserializeProfile(decoded)
+    } catch { /* ignora profilo invalido */ }
+  }
+
+  const tracksWithMeta: TrackWithMeta[] = finalTracks.map((t) => ({
+    ...t,
+    popularity: undefined,
+    bpm: undefined,
+  }))
+  const constraints = {
+    yearMin: yearStart ?? undefined,
+    yearMax: yearEnd ?? undefined,
+    mood: mood || undefined,
+  }
+  const ranked = rankTracks(tracksWithMeta, constraints, userProfileForRank)
+
+  return NextResponse.json(ranked.slice(0, 30))
 }
+
