@@ -308,3 +308,89 @@ Rate limit: 1 req/sec. Uses `sleep(1100)` between calls.
 d135f89  revert: back to a031ed0, keep SVG play/pause icons in CompactPlayerBar
 a031ed0  feat: MusicBrainz integration, share link, mix from track, compact mobile player
 ```
+
+
+---
+
+## Nuove Funzionalità Implementate (F1–F4)
+
+### F1 — LLM Planner (`lib/planner.ts`)
+Trasforma il testo utente in un piano strutturato (JSON validato con Zod):
+- **2–5 query di ricerca** per Monochrome/Discogs
+- **3–8 seed track candidate** con `estimatedRarity` [0-1]
+- **Vincoli musicali**: bpmMin/bpmMax, mood, yearMin/yearMax, country, instruments, keywords
+
+**Adattatori**:
+1. `OPENAI_API_KEY` → GPT-4o-mini
+2. `GROQ_API_KEY` → llama-3.3-70b (già usato da ai-search)
+3. Mock rule-based → nessuna API key richiesta
+
+Funzione pubblica: `planFromPrompt(prompt: string): Promise<Plan>`
+
+---
+
+### F2 — Ranking "Rarità" (`lib/ranker.ts`)
+
+**Punteggio composito `rarityScore` [0-1]**:
+| Componente | Peso | Logica |
+|---|---|---|
+| popularityScore | 0.35 | 1 - pop/100 (bassa pop = score alto) |
+| artistPenalty | 0.15 | -0.2 per ogni occorrenza aggiuntiva dello stesso artista |
+| mainstreamPenalty | 0.20 | penalità forte se pop > 70 |
+| diversityBonus | 0.15 | premia anni/album rari nella pool |
+| constraintCoherence | 0.15 | coerenza con bpm/mood/anno/keywords |
+
+**Personalizzazione** (capped a ±0.20 per mantenere esplorazione):
+- artistAffinity boost/penalty
+- rarityPreference match
+- BPM compatibility
+
+Funzione pubblica: `rankTracks(tracks, constraints, userProfile?): RankedTrack[]`
+
+---
+
+### F3 — Discovery a Grafo Multi-Hop (`lib/graphDiscovery.ts`)
+
+Algoritmo con budget request tracciato (max 40 request/generazione):
+
+```
+1. Search (planFromPrompt queries) → candidate pool
+2. selectSeeds(pool) → 3-8 seedIds (diversità artisti)
+3. hop1: getRecommendations(seed) × max8 seeds, max25 rec/seed
+4. hop2: getRecommendations(topK hop1) × max3 seeds (opzionale)
+5. dedup + rankTracks + ensureArtistDiversity
+```
+
+Limiti configurabili: `maxSeeds`, `maxRecsPerSeed`, `hop2MaxSeeds`, `maxRequests`, `requestTimeoutMs`
+
+**Fallback**: timeout per richiesta lenta (configurable), `Promise.allSettled` ovunque.
+
+Endpoint: `GET /api/discover?q=...&seen=...&hop2=true&limit=30`
+
+---
+
+### F4 — Personalizzazione (`lib/userProfile.ts`, `app/api/feedback/route.ts`)
+
+**Struttura FeedbackEntry**: `{ trackId, liked, timestamp, bpm?, rarityScore?, artist, year? }`
+
+**UserProfile derivato**:
+- `artistAffinity: Map<artist, score>` — +1 like, -1.5 dislike, clampato [-10, +10]
+- `preferredBpmRange: [min, max]` — media ± 1.5σ dei BPM liked
+- `rarityPreference: [0-1]` — media pesata rarityScore liked (likato conta ×2)
+
+**Storage**: localStorage (Zustand `feedbackStore` + `serializedProfile`), persistito in JSON
+
+**API**:
+- `POST /api/feedback` — registra like/dislike
+- `GET /api/feedback?userId=...` — recupera profilo
+- `DELETE /api/feedback?userId=...&trackId=...` — rimuove feedback
+
+**Integrazione store.ts**: `addLike()` e `addDislike()` ora aggiornano automaticamente il profilo.
+
+**Passare il profilo alle API**:
+```
+const profileB64 = btoa(JSON.stringify(serializedProfile))
+fetch(`/api/ai-search?q=...&profile=${profileB64}`)
+fetch(`/api/discover?q=...&profile=${profileB64}`)
+fetch(`/api/for-you?liked=...&profile=${profileB64}`)
+```
